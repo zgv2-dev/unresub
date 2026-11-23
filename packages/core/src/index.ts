@@ -5,3 +5,4 @@ export * from './detect.ts';
 export * from './alerts.ts';
 export * from './corrections.ts';
 export * from './manual.ts';
+export * from './cardswitch.ts';

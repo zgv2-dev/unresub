@@ -5,6 +5,8 @@ import {
   annualEquivalent,
   applyCorrections,
   buildManualSubscriptions,
+  extendWithSwitchedCharges,
+  linkCardSwitches,
   groupKeyOf,
   matchService,
   merchantKey,
@@ -44,20 +46,41 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
   const transactions = db.listTransactions();
   // Manual subscriptions claim their transactions first, so detection doesn't count them twice.
   const manual = buildManualSubscriptions(db.listManual(), transactions, { now, toLocal: sync.toLocal });
-  const raw = [
-    ...manual.subscriptions,
-    ...detectSubscriptions(transactions.filter(t => !manual.claimed.has(t.id)), { now, toLocal: sync.toLocal, splitGroups }),
-  ];
+  // A subscription moved to a card with another charge currency: continue the old series with the
+  // first new charges, and once the new card has its own series, fold the old one into it.
+  const raw = extendWithSwitchedCharges(
+    [
+      ...manual.subscriptions,
+      ...detectSubscriptions(transactions.filter(t => !manual.claimed.has(t.id)), { now, toLocal: sync.toLocal, splitGroups }),
+    ],
+    transactions,
+    { now, toLocal: sync.toLocal },
+  );
+  // The user's own merge decisions win; merged_into = '' means "keep separate".
+  const userMerge = new Set([...overrides].filter(([, o]) => o.merged_into != null).map(([k]) => k));
+  const autoLinks = linkCardSwitches(raw, userMerge);
   const nameOf = new Map(raw.map(r => [r.key, overrides.get(r.key)?.name ?? serviceById(r.serviceId)?.name ?? r.name]));
   const detected = applyCorrections(
     raw,
-    new Map([...overrides].map(([k, o]) => [k, { period: o.period, mergedInto: o.merged_into }])),
+    new Map([...new Set([...overrides.keys(), ...autoLinks.keys()])].map(k => {
+      const o = overrides.get(k);
+      return [k, { period: o?.period, mergedInto: o?.merged_into ?? autoLinks.get(k) ?? null }];
+    })),
     now,
   );
+  const txnById = new Map(transactions.map(t => [t.id, t]));
 
   const items = detected.map(d => {
     const isManual = d.key.startsWith('manual:');
-    const o: Partial<OverrideRow> = overrides.get(d.key) ?? {};
+    // A merged or moved series keeps the user's edits from its earlier key when the new key has none.
+    const o: Partial<OverrideRow> = overrides.get(d.key) ?? d.mergedKeys.map(k => overrides.get(k)).find(Boolean) ?? {};
+    // Card the subscription was on before its current one, if it moved.
+    const cardIds = d.transactionIds
+      .flatMap(id => txnById.get(id) ?? [])
+      .toSorted((a, b) => a.time - b.time)
+      .map(t => t.accountId);
+    const prevCard = cardIds.findLast(id => id !== d.accountId);
+    const movedFrom = prevCard && cardIds.lastIndexOf(prevCard) < cardIds.lastIndexOf(d.accountId) ? accounts.get(prevCard) : undefined;
     const serviceId = o.service_id ?? d.serviceId;
     const service = serviceById(serviceId);
     const period = d.period;
@@ -67,6 +90,10 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
       serviceId,
       name: o.name ?? (isManual ? d.name : service?.name ?? d.name),
       manual: isManual,
+      /** The card it was charged to before the current one, when it moved. */
+      movedFrom: movedFrom ? { id: movedFrom.id, maskedPan: movedFrom.masked_pan } : null,
+      /** Keys folded in automatically because the subscription moved to another card. */
+      autoLinked: d.mergedKeys.filter(k => autoLinks.has(k)),
       detectedName: d.name,
       period,
       category: service?.category ?? null,
@@ -500,7 +527,8 @@ export const createApp = (deps: AppDeps) => {
       cancel_url: pick(body.cancelUrl, prev?.cancel_url),
       notes: pick(body.notes, prev?.notes),
       remind_days: pick(body.remindDays, prev?.remind_days),
-      merged_into: pick(body.mergedInto, prev?.merged_into),
+      // Explicit null = the user separated it: stored as '' so automatic card-switch linking won't redo it.
+      merged_into: body.mergedInto === null ? '' : pick(body.mergedInto, prev?.merged_into),
     });
     return c.body(null, 204);
   });

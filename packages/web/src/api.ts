@@ -171,6 +171,10 @@ export interface SubscriptionItem {
   periodCorrected: boolean;
   /** Created by hand from a transaction. */
   manual: boolean;
+  /** Card it was charged to before the current one, when it moved (e.g. main card to subscriptions card). */
+  movedFrom: { id: string; maskedPan: string | null } | null;
+  /** Keys folded in automatically because the subscription moved to a card in another currency. */
+  autoLinked: string[];
 }
 
 export interface TransactionRow {

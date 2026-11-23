@@ -27,4 +27,14 @@ describe('manual subscriptions', () => {
     const manual = { key: 'manual:2', groupKey: groupKeyOf(gym[0]!), matchAmount: null, period: 'monthly' as const, name: 'Gym', serviceId: null, transactionIds: [] };
     expect(buildManualSubscriptions([manual], [...gym, ...coffee], { now }).subscriptions[0]?.chargeCount).toBe(2);
   });
+
+  it('follows the merchant to a card in another currency', () => {
+    const t = gym[0]!;
+    const manual = { key: 'manual:3', groupKey: groupKeyOf(t), matchAmount: 90_000, period: 'monthly' as const, name: 'Gym', serviceId: null, transactionIds: [t.id] };
+    const usd = makeSeries({ description: 'SPORTLIFE KYIV 0042', period: 'monthly', price: 2_200, currency: 840, count: 1, last: now - 8 * day }, 'acc-usd')
+      .map(x => ({ ...x, accountCurrency: 840, amount: x.operationAmount }));
+    const toLocal = (minor: number, c: number) => (c === 840 ? Math.round(minor * 41.5) : null);
+    const { subscriptions } = buildManualSubscriptions([manual], [...gym, ...coffee, ...usd], { now, toLocal });
+    expect(subscriptions[0]).toMatchObject({ chargeCount: 2, currency: 840, accountId: 'acc-usd', status: 'active' });
+  });
 });

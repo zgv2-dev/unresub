@@ -331,4 +331,63 @@ describe('server', () => {
       expect((await get('/api/subscriptions')).items.some((i: any) => i.key === key)).toBe(false);
     });
   });
+
+  describe('card switch', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const get = async (path: string) => (await (await app.request(path, { headers: auth })).json()) as any;
+    const patch = (key: string, body: object) =>
+      app.request(`/api/subscriptions/${encodeURIComponent(key)}`, { method: 'PATCH', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const setup = () => {
+      const id = seedSource(db);
+      db.upsertAccounts(id, [{ externalId: 'usd', currency: 840, balance: 100_000, creditLimit: 0, maskedPan: '4444****2222', iban: null, type: 'black' }]);
+      db.setSubscriptionCard(`${id}:usd`, true);
+      db.insertRates(now - 400 * 86_400, [{ currency: 840, buy: 41, sell: 41.5 }]);
+      return id;
+    };
+    const put = (id: string, ext: string, series: ReturnType<typeof makeSeries>, usdCard = false) =>
+      db.insertTransactions(`${id}:${ext}`, series.map(({ accountId: _, ...t }) => ({
+        ...t, accountExternalId: ext, raw: null, ...(usdCard && { accountCurrency: 840, amount: t.operationAmount }),
+      })));
+
+    it('keeps Anthropic as one subscription after it moves to the USD card', async () => {
+      const id = setup();
+      const switchAt = now - 6 * 86_400;
+      put(id, 'acc', makeSeries({ description: 'ANTHROPIC', period: 'monthly', price: 2_000, currency: 840, rate: 41, count: 4, last: addPeriod(switchAt, 'monthly', -1) }));
+      const [before] = (await get('/api/subscriptions')).items;
+      expect(before).toMatchObject({ onMainCard: true });
+      await patch(before.key, { notes: 'team plan' });
+
+      put(id, 'usd', makeSeries({ description: 'ANTHROPIC', period: 'monthly', price: 2_000, currency: 840, count: 1, last: switchAt }), true);
+      const body = await get('/api/subscriptions');
+      expect(body.items).toHaveLength(1);
+      expect(body.items[0]).toMatchObject({
+        key: before.key, chargeCount: 5, status: 'active', onMainCard: false, notes: 'team plan',
+        account: { id: `${id}:usd` }, movedFrom: { id: `${id}:acc` },
+      });
+      expect(body.alerts.filter((a: any) => a.type === 'on_main_card')).toEqual([]);
+    });
+
+    it('links a merchant that changed charge currency with the card and keeps corrections', async () => {
+      const id = setup();
+      const switchAt = now - 70 * 86_400;
+      put(id, 'acc', makeSeries({ description: 'ACME CLOUD', period: 'monthly', price: 83_000, currency: 980, count: 4, last: addPeriod(switchAt, 'monthly', -1), mcc: 7372 }));
+      const [old] = (await get('/api/subscriptions')).items;
+      await patch(old.key, { name: 'Acme hosting' });
+
+      // First charge on the USD card: the old series continues.
+      put(id, 'usd', makeSeries({ description: 'ACME CLOUD', period: 'monthly', price: 2_000, currency: 840, count: 1, last: switchAt, mcc: 7372 }), true);
+      let items = (await get('/api/subscriptions')).items;
+      expect(items).toMatchObject([{ key: old.key, name: 'Acme hosting', currency: 840, chargeCount: 5 }]);
+
+      // Two more: the USD card has its own series now; the old one is folded in and the name carries over.
+      put(id, 'usd', makeSeries({ description: 'ACME CLOUD', period: 'monthly', price: 2_000, currency: 840, count: 2, last: addPeriod(switchAt, 'monthly', 2), mcc: 7372 }), true);
+      items = (await get('/api/subscriptions')).items;
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ name: 'Acme hosting', currency: 840, chargeCount: 7, autoLinked: [old.key], movedFrom: { id: `${id}:acc` } });
+
+      // "Separate" sticks: no automatic re-linking.
+      await patch(old.key, { mergedInto: null });
+      expect((await get('/api/subscriptions')).items).toHaveLength(2);
+    });
+  });
 });

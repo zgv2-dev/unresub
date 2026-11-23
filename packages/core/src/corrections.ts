@@ -1,4 +1,4 @@
-import { addPeriod } from './money.ts';
+import { addPeriod, PERIOD_DAYS } from './money.ts';
 import { statusFor } from './detect.ts';
 import type { DetectedSubscription, Period } from './types.ts';
 
@@ -70,4 +70,39 @@ export const applyCorrections = (
   }
 
   return [...byKey.values()].toSorted((a, b) => a.nextChargeAt - b.nextChargeAt);
+};
+
+/** `svc:anthropic|840|2000` → `svc:anthropic` (service or merchant, without currency and amount). */
+export const baseGroup = (groupKey: string) => groupKey.split('|')[0]!;
+
+/**
+ * Finds series that are one subscription moved to another card with a different
+ * charge currency (e.g. billed in UAH to the main card, then in USD to the USD card).
+ * Same-currency moves need nothing: detection already groups by merchant across cards.
+ *
+ * Links an older series into a newer one when they share the service/merchant and period,
+ * the old one stopped before the new one started (within ~1.6 periods), and their UAH values
+ * at the time of the charges are within 30%. Returns `oldKey → newKey`.
+ */
+export const linkCardSwitches = (subs: DetectedSubscription[], skip: ReadonlySet<string> = new Set()) => {
+  const links = new Map<string, string>();
+  const byBase = Map.groupBy(subs.filter(s => !skip.has(s.key)), s => baseGroup(s.groupKey));
+  for (const list of byBase.values()) {
+    if (list.length < 2) continue;
+    const sorted = list.toSorted((a, b) => a.firstChargeAt - b.firstChargeAt);
+    for (const older of sorted) {
+      const newer = sorted.find(n =>
+        n !== older &&
+        !links.has(n.key) &&
+        n.currency !== older.currency &&
+        n.period === older.period &&
+        n.firstChargeAt > older.lastChargeAt &&
+        n.firstChargeAt - older.lastChargeAt <= PERIOD_DAYS[older.period] * 1.6 * 86_400 &&
+        older.localPrice > 0 && n.localPrice > 0 &&
+        Math.abs(n.localPrice - older.localPrice) <= Math.max(n.localPrice, older.localPrice) * 0.3,
+      );
+      if (newer) links.set(older.key, newer.key);
+    }
+  }
+  return links;
 };

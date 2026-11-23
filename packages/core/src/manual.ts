@@ -37,9 +37,20 @@ export const buildManualSubscriptions = (
 
   for (const m of manuals) {
     const attached = new Set(m.transactionIds);
-    const series = transactions
-      .filter(t => !claimed.has(t.id) && (attached.has(t.id) || matchesManual(m, t, catalog)))
-      .toSorted((a, b) => a.time - b.time);
+    const base = m.groupKey.split('|')[0];
+    const same = transactions.filter(t => !claimed.has(t.id) && (attached.has(t.id) || matchesManual(m, t, catalog)));
+    // Moved to a card in another currency: same merchant, other currency, similar UAH value.
+    const refTxn = same.toSorted((a, b) => b.time - a.time)[0];
+    const ref = refTxn ? localAmountOf(refTxn, toLocal) : null;
+    const switched = transactions.filter(t => {
+      if (claimed.has(t.id) || attached.has(t.id) || t.operationAmount >= 0) return false;
+      const g = groupKeyOf(t, catalog);
+      if (g === m.groupKey || g.split('|')[0] !== base) return false;
+      if (m.matchAmount == null) return true;
+      const local = localAmountOf(t, toLocal);
+      return !!ref && local != null && Math.abs(local - ref) <= Math.max(local, ref) * 0.3;
+    });
+    const series = [...same, ...switched].toSorted((a, b) => a.time - b.time);
     for (const t of series) claimed.add(t.id);
     const last = series.at(-1);
     if (!last) continue;
