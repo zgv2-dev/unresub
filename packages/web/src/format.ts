@@ -44,3 +44,5 @@ export const splitMoney = (minor: number, currency: number) => {
 export const fmtEta = (s: number) => (s < 90 ? `${s}s` : s < 5_400 ? `${Math.round(s / 60)} min` : `${(s / 3_600).toFixed(1)} h`);
 
 export const last4 = (pan: string | null | undefined) => (pan ? pan.slice(-4) : null);
+
+export const PERIOD_OPTIONS = (Object.keys(PERIOD_LABEL) as Period[]).map(value => ({ value, label: PERIOD_LABEL[value] }));

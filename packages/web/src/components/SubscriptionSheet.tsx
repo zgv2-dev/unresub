@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { formatMoney, LOCAL_CURRENCY, type Period } from '@unresub/core';
 import { api, type CatalogEntry, type SubscriptionItem } from '../api.ts';
-import { fmtDate, PERIOD_LABEL, relative } from '../format.ts';
+import { fmtDate, PERIOD_LABEL, PERIOD_OPTIONS, PERIOD_SHORT, relative } from '../format.ts';
 import { Icon } from './Icon.tsx';
 import { ServiceIcon } from './ServiceIcon.tsx';
 import { Sheet } from './Sheet.tsx';
+import { Select } from './Select.tsx';
+import { Stepper } from './Stepper.tsx';
 
 type Props = {
   s: SubscriptionItem;
@@ -132,28 +134,23 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
 
       <form className="stack" onSubmit={e => (e.preventDefault(), void save())}>
         <div className="divider-title">Details</div>
-        <label className="field">
+        <div className="field">
           <span>Service</span>
-          <select className="input" value={serviceId} onChange={e => pickService(e.target.value)}>
-            <option value="">Not in the list</option>
-            {catalog.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </label>
+          <Select label="Service" value={serviceId} onChange={pickService} options={[{ value: '', label: 'Not in the list' }, ...catalog.map(c => ({ value: c.id, label: c.name, icon: <ServiceIcon serviceId={c.id} name={c.name} /> }))]} />
+        </div>
         <label className="field">
           <span>Name</span>
           <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder={s.name} />
         </label>
         <div className="grid-2">
-          <label className="field">
+          <div className="field">
             <span>Billing period</span>
-            <select className="input" value={period} onChange={e => setPeriod(e.target.value as Period)}>
-              {Object.entries(PERIOD_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          </label>
-          <label className="field">
+            <Select label="Billing period" value={period} onChange={setPeriod} options={PERIOD_OPTIONS} />
+          </div>
+          <div className="field">
             <span>Remind, days before</span>
-            <input className="input num" type="number" inputMode="numeric" min={0} max={30} value={remindDays} onChange={e => setRemindDays(Math.max(0, Math.min(30, Number(e.target.value) || 0)))} />
-          </label>
+            <Stepper label="Remind, days before" value={remindDays} onChange={setRemindDays} min={0} max={30} />
+          </div>
         </div>
         <label className="field">
           <span>Cancel or manage link</span>
@@ -199,10 +196,13 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
               <em>For example after a price change or a new bank description.</em>
             </span>
             <div className="fix-btns">
-              <select className="input" value={mergeInto} onChange={e => setMergeInto(e.target.value)} aria-label="Combine with">
-                <option value="">Pick one…</option>
-                {others.map(o => <option key={o.key} value={o.key}>{o.name} · {formatMoney(o.price, o.currency)}</option>)}
-              </select>
+              <Select
+                label="Combine with"
+                placeholder="Pick one…"
+                value={mergeInto}
+                onChange={setMergeInto}
+                options={others.map(o => ({ value: o.key, label: o.name, hint: `${formatMoney(o.price, o.currency)} · ${PERIOD_SHORT[o.period]}`, icon: <ServiceIcon serviceId={o.serviceId} name={o.name} /> }))}
+              />
               <button className="btn soft sm" disabled={busy || !mergeInto} onClick={() => void act(() => api.merge(s.key, mergeInto))}>
                 Combine
               </button>

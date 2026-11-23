@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { formatMoney, type Period } from '@unresub/core';
 import { api, type CatalogEntry, type SimilarResponse, type TransactionRow } from '../api.ts';
-import { fmtDate, PERIOD_LABEL } from '../format.ts';
+import { fmtDate, PERIOD_OPTIONS } from '../format.ts';
 import { Icon } from './Icon.tsx';
 import { ServiceIcon } from './ServiceIcon.tsx';
 import { Sheet } from './Sheet.tsx';
+import { Select } from './Select.tsx';
 
 type Props = {
   t: TransactionRow;
@@ -96,23 +97,18 @@ export const TransactionSheet = ({ t, catalog, onClose, onOpenSubscription, onCr
       {charge && !owned && making && (
         <form className="stack" onSubmit={e => void create(e)}>
           <div className="divider-title">New subscription</div>
-          <label className="field">
+          <div className="field">
             <span>Service</span>
-            <select className="input" value={serviceId} onChange={e => setServiceId(e.target.value)}>
-              <option value="">Not in the list</option>
-              {catalog.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </label>
+            <Select label="Service" value={serviceId} onChange={setServiceId} options={[{ value: '', label: 'Not in the list' }, ...catalog.map(c => ({ value: c.id, label: c.name, icon: <ServiceIcon serviceId={c.id} name={c.name} /> }))]} />
+          </div>
           <label className="field">
             <span>Name</span>
             <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder={t.description} required />
           </label>
-          <label className="field">
+          <div className="field">
             <span>Billing period</span>
-            <select className="input" value={period} onChange={e => setPeriod(e.target.value as Period)}>
-              {Object.entries(PERIOD_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          </label>
+            <Select label="Billing period" value={period} onChange={setPeriod} options={PERIOD_OPTIONS} />
+          </div>
           <label className="check">
             <input type="checkbox" checked={matchAmount} onChange={e => setMatchAmount(e.target.checked)} />
             <span>

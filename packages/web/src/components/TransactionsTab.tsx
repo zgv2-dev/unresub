@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { formatMoney, LOCAL_CURRENCY, matchService } from '@unresub/core';
+import { currencyAlpha, formatMoney, LOCAL_CURRENCY, matchService } from '@unresub/core';
 import { api, type Account, type TransactionFilters, type TransactionRow } from '../api.ts';
 import { dateFmtYear, last4 } from '../format.ts';
 import { Icon } from './Icon.tsx';
 import { ServiceIcon } from './ServiceIcon.tsx';
+import { DatePicker } from './DatePicker.tsx';
+import { Select } from './Select.tsx';
 
 type Props = {
   accounts: Account[];
@@ -81,16 +83,18 @@ export const TransactionsTab = ({ accounts, version, onOpenTransaction }: Props)
 
       {showFilters && (
         <section className="card pad stack filters">
-          <label className="field">
+          <div className="field">
             <span>Card</span>
-            <select className="input" value={account} onChange={e => setAccount(e.target.value)}>
-              <option value="">All cards</option>
-              {cards.map(a => <option key={a.id} value={a.id}>•••• {last4(a.maskedPan)} · {a.currency === LOCAL_CURRENCY ? 'UAH' : a.currency === 840 ? 'USD' : a.currency === 978 ? 'EUR' : a.currency}</option>)}
-            </select>
-          </label>
+            <Select
+              label="Card"
+              value={account}
+              onChange={setAccount}
+              options={[{ value: '', label: 'All cards' }, ...cards.map(a => ({ value: a.id, label: `•••• ${last4(a.maskedPan)}`, hint: `${currencyAlpha(a.currency)} · ${a.type ?? 'card'}` }))]}
+            />
+          </div>
           <div className="grid-2">
-            <label className="field"><span>From</span><input className="input" type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
-            <label className="field"><span>To</span><input className="input" type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
+            <div className="field"><span>From</span><DatePicker label="From" value={from} onChange={setFrom} max={to || undefined} /></div>
+            <div className="field"><span>To</span><DatePicker label="To" value={to} onChange={setTo} min={from || undefined} /></div>
           </div>
           <div className="grid-2">
             <label className="field"><span>Amount from</span><input className="input num" inputMode="decimal" value={min} onChange={e => setMin(e.target.value)} placeholder="0" /></label>

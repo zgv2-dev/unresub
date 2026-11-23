@@ -30,7 +30,7 @@ const luminance = (hex: string) => {
 };
 
 export const ServiceIcon = ({ serviceId, name, size, dot }: { serviceId: string | null; name: string; size?: 'lg'; dot?: string }) => {
-  const icon = (serviceId && BY_ID[serviceId]) || BY_NAME.find(([re]) => re.test(name))?.[1];
+  const icon = serviceId ? BY_ID[serviceId] ?? (BRAND[serviceId] ? undefined : BY_NAME.find(([re]) => re.test(name))?.[1]) : BY_NAME.find(([re]) => re.test(name))?.[1];
   const color = icon ? `#${icon.hex}` : (serviceId && BRAND[serviceId]) || PALETTE[Math.abs(hash(name)) % PALETTE.length]!;
   const dark = luminance(color) < 0.16;
   const style = dark ? { background: 'var(--mono-tile)', color: 'var(--mono-glyph)' } : { background: color, color: luminance(color) > 0.7 ? '#111' : '#fff' };
