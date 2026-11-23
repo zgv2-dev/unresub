@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { currencyAlpha, formatMoney, LOCAL_CURRENCY, matchService } from '@unresub/core';
+import { currencyAlpha, formatMoney, LOCAL_CURRENCY, matchService, mccCategory } from '@unresub/core';
 import { api, type Account, type TransactionFilters, type TransactionRow } from '../api.ts';
 import { dateFmtYear, last4 } from '../format.ts';
-import { Icon } from './Icon.tsx';
+import { CATEGORY_ICON, Icon } from './Icon.tsx';
+import { impliedRate } from './TransactionDetails.tsx';
 import { ServiceIcon } from './ServiceIcon.tsx';
 import { DatePicker } from './DatePicker.tsx';
 import { Select } from './Select.tsx';
@@ -139,6 +140,8 @@ export const TransactionsTab = ({ accounts, version, onOpenTransaction }: Props)
 const TxnRow = ({ t, account, onOpen }: { t: TransactionRow; account?: Account; onOpen: () => void }) => {
   const foreign = t.operationCurrency !== t.accountCurrency;
   const credit = t.amount > 0;
+  const cat = mccCategory(t.mcc);
+  const d = t.details;
   return (
     <li>
       <button className="row-btn" onClick={onOpen}>
@@ -147,18 +150,24 @@ const TxnRow = ({ t, account, onOpen }: { t: TransactionRow; account?: Account; 
           <span className="row-title">{t.description}</span>
           <span className="row-meta">
             {new Date(t.time * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}
+            <> · <Icon name={CATEGORY_ICON[cat.id]} size={13} className="row-cat" /> {cat.label}</>
             {account?.maskedPan && <> · ••{last4(account.maskedPan)}</>}
-            {t.hold && <> · pending</>}
+            {t.counterName && t.counterName !== t.description && <> · {t.counterName}</>}
           </span>
-          {t.subscriptionKey && (
+          {d?.comment && <span className="row-meta row-comment">“{d.comment}”</span>}
+          {(t.subscriptionKey || t.hold || !!d?.cashbackAmount || !!d?.commissionRate) && (
             <span className="chips">
-              <span className="chip ok">{t.subscriptionName}</span>
+              {t.hold && <span className="chip warn">Pending</span>}
+              {t.subscriptionKey && <span className="chip ok">{t.subscriptionName}</span>}
+              {!!d?.cashbackAmount && <span className="chip ok">+{formatMoney(d.cashbackAmount, t.accountCurrency)} cashback</span>}
+              {!!d?.commissionRate && <span className="chip">{formatMoney(d.commissionRate, t.accountCurrency)} fee</span>}
             </span>
           )}
         </div>
         <div className="row-price num">
           <strong className={credit ? 'credit' : ''}>{credit ? '+' : '−'}{formatMoney(Math.abs(t.amount), t.accountCurrency)}</strong>
-          {foreign && <span>{formatMoney(Math.abs(t.operationAmount), t.operationCurrency)}</span>}
+          {foreign && <span title={impliedRate(t) ?? undefined}>{formatMoney(Math.abs(t.operationAmount), t.operationCurrency)}</span>}
+          {d?.balance != null && <span className="faint">bal. {formatMoney(d.balance, t.accountCurrency)}</span>}
         </div>
       </button>
     </li>

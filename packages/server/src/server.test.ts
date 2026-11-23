@@ -362,6 +362,27 @@ describe('server', () => {
       expect(body.items.map((t: any) => t.description)).toEqual(['Silpo']);
     });
 
+    it('returns every monobank field from the stored statement item, without a resync', async () => {
+      const id = seedSource(db);
+      const raw = {
+        id: 'ZuHWzqkKGVo=', time: now - 3_600, description: 'Сільпо', mcc: 5411, originalMcc: 5499, hold: true,
+        amount: -95_000, operationAmount: -95_000, currencyCode: 980, commissionRate: 0, cashbackAmount: 950, balance: 1_000_000,
+        comment: 'вечеря', receiptId: 'XXXX-XXXX-XXXX-XXXX', counterEdrpou: '3096889974', counterIban: 'UA898999980000355639201001404',
+      };
+      db.insertTransactions(`${id}:acc`, [{
+        id: 'monobank:ZuHWzqkKGVo=', accountExternalId: 'acc', time: raw.time, description: raw.description, mcc: 5411,
+        amount: raw.amount, accountCurrency: 980, operationAmount: raw.operationAmount, operationCurrency: 980, counterName: null, hold: true, raw,
+      }]);
+      const [t] = (await get('/api/transactions')).items;
+      expect(t).toMatchObject({
+        hold: true,
+        details: {
+          bankId: 'ZuHWzqkKGVo=', originalMcc: 5499, commissionRate: 0, cashbackAmount: 950, balance: 1_000_000, comment: 'вечеря',
+          receiptId: 'XXXX-XXXX-XXXX-XXXX', invoiceId: null, counterEdrpou: '3096889974', counterIban: 'UA898999980000355639201001404',
+        },
+      });
+    });
+
     it('creates a subscription from one transaction that picks up future charges', async () => {
       const id = seedSource(db);
       const first = makeSeries({ description: 'SPORTLIFE 0042', period: 'monthly', price: 90_000, currency: 980, count: 1, last: now - 10 * 86_400, mcc: 7997 });

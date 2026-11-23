@@ -633,3 +633,19 @@ code { font: 12.5px ui-monospace, 'SF Mono', Menlo, monospace; background: var(-
 .tabs .tab-end[aria-selected='true'] { background: var(--surface); }
 .dot-status.warn::before { background: var(--warn); }
 .desk .seg-wide { display: none; }
+
+/* Transaction details: every field monobank sends */
+.kv { margin: 0; border-radius: 14px; background: var(--surface-2); overflow: hidden; }
+.kv > div { display: grid; grid-template-columns: minmax(120px, 36%) 1fr; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.kv > div:first-child { border-top: 0; }
+.kv dt { color: var(--text-3); font-size: 13px; font-weight: 500; padding-top: 2px; }
+.kv dd { margin: 0; min-width: 0; font-size: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
+.kv .icon-btn.sm { width: 28px; height: 28px; }
+.kv-code { background: var(--surface); word-break: break-all; }
+.kv .pre { white-space: pre-wrap; }
+.row-cat { flex: none; color: var(--text-3); }
+.row-comment { font-style: italic; color: var(--text-3); }
+@media (max-width: 420px) {
+  .kv > div { grid-template-columns: 1fr; gap: 2px; }
+}
+.kv .credit { color: var(--success); }

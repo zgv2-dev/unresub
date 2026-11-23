@@ -42,6 +42,8 @@ export interface MonoStatementItem {
   counterName?: string;
   counterEdrpou?: string;
   counterIban?: string;
+  receiptId?: string;
+  invoiceId?: string;
 }
 
 export interface MonoRate {

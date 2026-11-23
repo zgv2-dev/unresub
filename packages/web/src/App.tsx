@@ -278,6 +278,7 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
         <TransactionSheet
           key={txn.id}
           t={txn}
+          account={accounts.find(a => a.id === txn.accountId)}
           catalog={catalog}
           onClose={() => setTxn(null)}
           onOpenSubscription={key => (setTxn(null), setOpenKey(key))}

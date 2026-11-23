@@ -644,6 +644,7 @@ export const createApp = (deps: AppDeps) => {
       balance: a.balance,
       creditLimit: a.credit_limit,
       maskedPan: a.masked_pan,
+      iban: a.iban,
       type: a.type,
       isSubscriptionCard: !!a.is_subscription_card,
       backfilledFrom: a.backfilled_from,
@@ -735,10 +736,28 @@ export const createApp = (deps: AppDeps) => {
     for (const i of view.items) for (const id of i.transactionIds) owner.set(id, { key: i.key, name: i.name });
     return { owner, view };
   };
-  const toRow = (t: ReturnType<Db['listTransactions']>[number], owner: Map<string, { key: string; name: string }>, excluded?: Set<string>) => {
+  /** Every field monobank's statement returns, read from the stored bank item, so older rows get them without a resync. */
+  const detailsOf = (raw: Record<string, unknown> | null) => {
+    const num = (k: string) => (typeof raw?.[k] === 'number' ? (raw[k] as number) : null);
+    const str = (k: string) => (typeof raw?.[k] === 'string' && raw[k] ? (raw[k] as string) : null);
+    return {
+      bankId: str('id'),
+      originalMcc: num('originalMcc'),
+      commissionRate: num('commissionRate'),
+      cashbackAmount: num('cashbackAmount'),
+      balance: num('balance'),
+      comment: str('comment'),
+      receiptId: str('receiptId'),
+      invoiceId: str('invoiceId'),
+      counterEdrpou: str('counterEdrpou'),
+      counterIban: str('counterIban'),
+    };
+  };
+  const toRow = (db: Db, t: ReturnType<Db['listTransactions']>[number], owner: Map<string, { key: string; name: string }>, excluded?: Set<string>) => {
     const o = owner.get(t.id);
     return {
       ...t,
+      details: detailsOf(db.transactionRaw(t.id)),
       subscriptionKey: o?.key ?? null,
       subscriptionName: o?.name ?? null,
       /** Unlinked from a subscription by the user. */
@@ -769,7 +788,7 @@ export const createApp = (deps: AppDeps) => {
         (p.unassigned !== '1' || !owner.has(t.id)),
       )
       .reverse();
-    return c.json({ total: rows.length, items: rows.slice(offset, offset + limit).map(t => toRow(t, owner, excluded)) });
+    return c.json({ total: rows.length, items: rows.slice(offset, offset + limit).map(t => toRow(db, t, owner, excluded)) });
   });
 
   /** Other debits from the same merchant, to attach when creating a subscription by hand. */
@@ -787,11 +806,11 @@ export const createApp = (deps: AppDeps) => {
       .reverse()
       .slice(0, 50)
       
-      .map(x => ({ ...toRow(x, owner, excluded), sameAmount: Math.abs(Math.abs(x.operationAmount) - amount) <= amount * 0.03 }));
+      .map(x => ({ ...toRow(db, x, owner, excluded), sameAmount: Math.abs(Math.abs(x.operationAmount) - amount) <= amount * 0.03 }));
     const service = matchService(t.description);
     const cleaned = t.description.replace(/\s*[#№]?\d{3,}\S*/g, '').trim() || t.description;
     return c.json({
-      transaction: toRow(t, owner, excluded),
+      transaction: toRow(db, t, owner, excluded),
       groupKey,
       merchant: merchantKey(t.description),
       suggested: { name: service?.name ?? t.counterName ?? cleaned, serviceId: service?.id ?? null },

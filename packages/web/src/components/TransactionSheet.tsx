@@ -1,14 +1,16 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { formatMoney, type Period } from '@unresub/core';
-import { api, type CatalogEntry, type SimilarResponse, type TransactionRow } from '../api.ts';
+import { api, type Account, type CatalogEntry, type SimilarResponse, type TransactionRow } from '../api.ts';
 import { fmtDate, PERIOD_OPTIONS } from '../format.ts';
 import { Icon } from './Icon.tsx';
 import { ServiceIcon } from './ServiceIcon.tsx';
 import { Sheet } from './Sheet.tsx';
 import { Select } from './Select.tsx';
+import { TransactionDetails } from './TransactionDetails.tsx';
 
 type Props = {
   t: TransactionRow;
+  account?: Account;
   catalog: CatalogEntry[];
   onClose: () => void;
   onOpenSubscription: (key: string) => void;
@@ -16,7 +18,7 @@ type Props = {
   onCreated: (key: string) => void;
 };
 
-export const TransactionSheet = ({ t, catalog, onClose, onOpenSubscription, onCreated }: Props) => {
+export const TransactionSheet = ({ t, account, catalog, onClose, onOpenSubscription, onCreated }: Props) => {
   const formId = useId();
   const [similar, setSimilar] = useState<SimilarResponse | null>(null);
   const [making, setMaking] = useState(false);
@@ -154,9 +156,9 @@ export const TransactionSheet = ({ t, catalog, onClose, onOpenSubscription, onCr
         </form>
       )}
 
-      <p className="xs faint" style={{ marginTop: 16 }}>
-        Bank description <code>{t.description}</code>{t.mcc != null && <> · MCC {t.mcc}</>}
-      </p>
+      <div style={{ marginTop: 20 }}>
+        <TransactionDetails t={t} account={account} />
+      </div>
     </Sheet>
   );
 };

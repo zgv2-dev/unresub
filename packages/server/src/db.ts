@@ -216,7 +216,8 @@ export const openDb = (path: string) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
         hold = excluded.hold, amount = excluded.amount, operation_amount = excluded.operation_amount, raw = excluded.raw`),
-    txns: db.prepare('SELECT * FROM transactions WHERE time >= ? ORDER BY time'),
+    txns: db.prepare('SELECT id, account_id, time, description, mcc, amount, account_currency, operation_amount, operation_currency, counter_name, hold FROM transactions WHERE time >= ? ORDER BY time'),
+    txnRaw: db.prepare('SELECT raw FROM transactions WHERE id = ?'),
     insertRate: db.prepare('INSERT OR REPLACE INTO rate_snapshots (fetched_at, currency, rate_buy, rate_sell, rate_cross) VALUES (?, ?, ?, ?, ?)'),
     rateNear: db.prepare('SELECT * FROM rate_snapshots WHERE currency = ? ORDER BY ABS(fetched_at - ?) LIMIT 1'),
     overrides: db.prepare('SELECT * FROM subscription_overrides'),
@@ -303,6 +304,17 @@ export const openDb = (path: string) => {
         counterName: r.counter_name,
         hold: !!r.hold,
       })),
+
+    /** Everything the bank sent for one transaction, as stored (null for rows without it). */
+    transactionRaw: (id: string): Record<string, unknown> | null => {
+      const r = q.txnRaw.get(id) as { raw: string | null } | undefined;
+      try {
+        const v: unknown = r?.raw ? JSON.parse(r.raw) : null;
+        return v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
+      } catch {
+        return null;
+      }
+    },
 
     insertRates: (at: number, rates: { currency: number; buy?: number; sell?: number; cross?: number }[]) => {
       for (const r of rates) q.insertRate.run(at, r.currency, r.buy ?? null, r.sell ?? null, r.cross ?? null);

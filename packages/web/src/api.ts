@@ -274,6 +274,22 @@ export interface TransactionRow {
   subscriptionName: string | null;
   /** Unlinked from a subscription by the user */
   excluded?: boolean;
+  details?: TransactionDetails;
+}
+
+/** The rest of monobank's statement item; null when the bank didn't send it. Amounts in account-currency minor units. */
+export interface TransactionDetails {
+  bankId: string | null;
+  originalMcc: number | null;
+  commissionRate: number | null;
+  cashbackAmount: number | null;
+  /** Card balance right after this operation */
+  balance: number | null;
+  comment: string | null;
+  receiptId: string | null;
+  invoiceId: string | null;
+  counterEdrpou: string | null;
+  counterIban: string | null;
 }
 
 export interface HistoryRow {
@@ -374,6 +390,7 @@ export interface Account {
   currency: number;
   balance: number;
   maskedPan: string | null;
+  iban?: string | null;
   type: string | null;
   isSubscriptionCard: boolean;
 }

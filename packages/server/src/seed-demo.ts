@@ -40,9 +40,25 @@ const txns = demoTransactions().map(({ accountId: _, ...t }) => {
     id: t.id.replace('fixture', 'demo'),
     accountExternalId: usd ? 'acc-usd' : 'acc-main',
     ...(usd && { accountCurrency: 840, amount: t.operationAmount }),
-    raw: null,
+    raw: null as Record<string, unknown> | null,
   };
 });
+// A monobank-like statement item for each, so the transaction panel shows every field. Balances run back from today's.
+const balances: Record<string, number> = { 'acc-main': 1_254_300, 'acc-usd': 500 };
+for (const t of txns.toSorted((a, b) => b.time - a.time)) {
+  const balance = balances[t.accountExternalId]!;
+  balances[t.accountExternalId] = balance - t.amount;
+  const n = Number(t.id.replace(/\D/g, '').slice(-3)) || 0;
+  t.raw = {
+    id: `demo${t.id.replace(/\W/g, '').slice(-12)}`,
+    time: t.time, description: t.description, mcc: t.mcc, originalMcc: t.mcc, hold: !!t.hold,
+    amount: t.amount, operationAmount: t.operationAmount, currencyCode: t.operationCurrency,
+    commissionRate: 0, cashbackAmount: t.amount < 0 && t.accountCurrency === 980 ? Math.round(-t.amount * 0.01) : 0, balance,
+    ...(n % 7 === 0 && { comment: 'Дякую!' }),
+    ...(t.amount < 0 && n % 3 === 0 && { receiptId: `${(1000 + n).toString()}-${(2000 + n) % 9999}-K1MX-${(n * 37) % 9999}` }),
+    ...(t.counterName && { counterEdrpou: '43603741', counterIban: 'UA213223130000026007233566001' }),
+  };
+}
 db.insertTransactions(`${id}:acc-main`, txns.filter(t => t.accountExternalId === 'acc-main'));
 db.insertTransactions(`${id}:acc-usd`, txns.filter(t => t.accountExternalId === 'acc-usd'));
 console.log(`Seeded ${txns.length} demo transactions for ${user.username}`);
