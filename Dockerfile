@@ -35,7 +35,6 @@ COPY --from=build /app/packages/web/dist packages/web/dist
 # Runs as root on purpose: Railway mounts volumes root-owned, and a non-root
 # user couldn't write the SQLite file there without extra settings.
 RUN mkdir /data
-VOLUME /data
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD ["node", "-e", "fetch(`http://127.0.0.1:${process.env.PORT}/healthz`).then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
