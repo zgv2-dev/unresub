@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { auth, getServer, isNative, setServer, type AuthStatus, type User } from '../api.ts';
+import { ApiError, auth, getServer, isNative, setServer, type AuthStatus, type User } from '../api.ts';
 import { Icon } from './Icon.tsx';
 import { ServiceIcon } from './ServiceIcon.tsx';
 
@@ -50,14 +50,29 @@ export const Login = ({ status, onDone, onServerChange }: { status: AuthStatus |
     }
   };
 
-  const connect = (e: FormEvent) => {
+  /** Checks the address before leaving this step, so a typo or an old server gets a clear message. */
+  const connect = async (e: FormEvent) => {
     e.preventDefault();
-    let url = server.trim();
-    if (url && !/^https?:\/\//.test(url)) url = `https://${url}`;
-    setServer(url);
+    let url = server.trim().replace(/\/+$/, '');
+    if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
     setServerInput(url);
-    setEditServer(false);
-    onServerChange();
+    setServer(url);
+    setBusy(true);
+    setError(null);
+    try {
+      await auth.status();
+      setEditServer(false);
+      onServerChange();
+    } catch (e) {
+      const status = e instanceof ApiError ? e.status : 0;
+      setError(
+        status === 0 ? `Can't reach ${url}. Check the address and your connection.`
+        : status === 401 || status === 404 ? `${url} answers, but runs an older UnReSub without accounts. Update the server, then try again.`
+        : `${url} answered with an error (${status}). Try again in a minute.`,
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const hero = (
@@ -80,10 +95,10 @@ export const Login = ({ status, onDone, onServerChange }: { status: AuthStatus |
             <span>Your UnReSub server</span>
             <input className="input" type="url" inputMode="url" value={server} onChange={e => setServerInput(e.target.value)} placeholder="https://unresub.example.com" autoFocus autoCapitalize="off" autoCorrect="off" />
           </label>
-          <button className="btn block" disabled={!server.trim()}>
-            <Icon name="chevron" size={18} /> Continue
+          <button className="btn block" disabled={busy || !server.trim()}>
+            <Icon name="chevron" size={18} /> {busy ? 'Checking…' : 'Continue'}
           </button>
-          {getServer() && !status && !editServer && <p className="small error">Can't reach {getServer()}. Check the address and that the server is running.</p>}
+          {error && <p className="small error" role="alert">{error}</p>}
           <p className="xs faint">The address where you or your family host UnReSub.</p>
         </form>
       </main>
