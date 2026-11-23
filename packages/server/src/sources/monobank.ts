@@ -62,8 +62,10 @@ export class MonobankError extends Error {
 /** Serialises personal-API calls per token so we never exceed 1 req/min. */
 const queues = new Map<string, { last: number; chain: Promise<unknown> }>();
 
+const queueId = (token: string) => createHash('sha256').update(token).digest('hex');
+
 const throttled = <T>(token: string, fn: () => Promise<T>): Promise<T> => {
-  const id = createHash('sha256').update(token).digest('hex');
+  const id = queueId(token);
   const q = queues.get(id) ?? { last: 0, chain: Promise.resolve() };
   queues.set(id, q);
   const run = q.chain.then(async () => {
@@ -109,11 +111,17 @@ export const toSourceTransaction = (accountExternalId: string, item: MonoStateme
 export class MonobankSource implements BankSource {
   readonly kind = 'monobank' as const;
   readonly maxRangeSeconds = MAX_RANGE;
+  readonly minRequestGapMs = PERSONAL_GAP_MS;
   #token: string;
   #accountCurrency = new Map<string, number>();
 
   constructor(token: string) {
     this.#token = token;
+  }
+
+  /** Epoch ms when the rate limit allows the next personal-API request. */
+  nextRequestAt() {
+    return (queues.get(queueId(this.#token))?.last ?? 0) + PERSONAL_GAP_MS;
   }
 
   async clientInfo() {

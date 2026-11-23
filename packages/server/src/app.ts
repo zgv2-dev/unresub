@@ -76,6 +76,35 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
   };
 };
 
+const MONTH = 30.44 * 86_400;
+
+/** Per-card history coverage, derived from what is stored, so it survives restarts. */
+export const syncProgress = (db: Db, sync: Pick<SyncService, 'status' | 'horizon' | 'backfillMonths'>, sourceId: string) => {
+  const status = sync.status(sourceId);
+  const horizon = sync.horizon();
+  return db.accountsBySource(sourceId).map(a => {
+    const complete = a.backfilled_from != null && a.backfilled_from <= horizon;
+    const covered = a.backfilled_from != null && a.synced_to != null ? a.synced_to - Math.max(a.backfilled_from, horizon) : 0;
+    const remaining = status.remainingByAccount[a.id] ?? 0;
+    return {
+      accountId: a.id,
+      maskedPan: a.masked_pan,
+      currency: a.currency,
+      type: a.type,
+      monthsDone: Math.min(sync.backfillMonths, Math.max(0, Math.round((covered / MONTH) * 10) / 10)),
+      monthsTotal: sync.backfillMonths,
+      historyFrom: a.backfilled_from,
+      syncedTo: a.synced_to,
+      state:
+        status.running && status.currentAccountId === a.id ? 'syncing'
+        : status.running && remaining > 0 ? 'queued'
+        : complete ? 'done'
+        : status.lastError ? 'error'
+        : 'pending',
+    } as const;
+  });
+};
+
 export const createApp = (db: Db, sync: SyncService, apiToken: string) => {
   const app = new Hono();
 
@@ -127,6 +156,7 @@ export const createApp = (db: Db, sync: SyncService, apiToken: string) => {
       createdAt: s.created_at,
       webhookUrl: sync.webhookUrl(s) ? 'configured' : null,
       sync: sync.status(s.id),
+      progress: syncProgress(db, sync, s.id),
     }))),
   );
 

@@ -30,6 +30,10 @@ export interface BankSource {
   readonly kind: SourceKind;
   /** Longest window one `fetchTransactions` call may cover. */
   readonly maxRangeSeconds: number;
+  /** Minimum spacing between requests imposed by the bank, if any. */
+  readonly minRequestGapMs?: number;
+  /** Epoch ms when the next request may go out, for progress display. */
+  nextRequestAt?(): number;
   listAccounts(): Promise<SourceAccount[]>;
   fetchTransactions(accountExternalId: string, from: number, to: number): Promise<SourceTransaction[]>;
   registerWebhook?(url: string): Promise<void>;

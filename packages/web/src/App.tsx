@@ -84,7 +84,7 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
   const syncing = sources.some(s => s.sync.running);
   useEffect(() => {
     if (!syncing) return;
-    const t = setInterval(() => void load(), 15_000);
+    const t = setInterval(() => void load(), 5_000);
     return () => clearInterval(t);
   }, [syncing, load]);
 
@@ -314,6 +314,7 @@ const Connections = ({ sources, accounts, onChange }: { sources: Source[]; accou
             {src.sync.lastFinishedAt && <> · last sync {dateFmt.format(src.sync.lastFinishedAt * 1000)}</>}
             {src.sync.lastError && <span className="error"> · {src.sync.lastError}</span>}
           </div>
+          {src.sync.running && <SyncProgressLines src={src} />}
           <ul className="accounts">
             {accounts.filter(a => a.sourceId === src.id).map(a => (
               <li key={a.id} className="row between">
@@ -378,5 +379,27 @@ const AlertBanner = ({ alerts }: { alerts: Alert[] }) => {
         </div>
       )}
     </section>
+  );
+};
+
+const STATE_LABEL = { fetching: 'loading', waiting_rate_limit: 'waiting for monobank rate limit', retrying: 'monobank asked to slow down, retrying', idle: '' } as const;
+const fmtEta = (s: number) => (s < 90 ? `${s}s` : s < 5_400 ? `${Math.round(s / 60)} min` : `${(s / 3_600).toFixed(1)} h`);
+
+const SyncProgressLines = ({ src }: { src: Source }) => {
+  const { sync, progress } = src;
+  return (
+    <div className="stack small">
+      <div className="muted">
+        {sync.phase === 'backfill' ? 'Loading history' : 'Checking new transactions'} · {STATE_LABEL[sync.state]}
+        {sync.etaSeconds != null && <> · about {fmtEta(sync.etaSeconds)} left</>}
+      </div>
+      {progress.map(p => (
+        <div key={p.accountId} className="row between">
+          <span>{p.maskedPan ? `•••• ${p.maskedPan.slice(-4)}` : p.type} {p.state === 'syncing' && '⟳'}</span>
+          <progress max={p.monthsTotal} value={p.monthsDone} style={{ flex: 1, margin: '0 8px' }} />
+          <span className="muted">{p.state === 'done' ? 'done' : `${Math.floor(p.monthsDone)}/${p.monthsTotal} mo`}</span>
+        </div>
+      ))}
+    </div>
   );
 };

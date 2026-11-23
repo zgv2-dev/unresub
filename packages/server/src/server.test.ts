@@ -129,4 +129,64 @@ describe('server', () => {
     expect(body.alerts).toContainEqual(expect.objectContaining({ type: 'low_balance', name: 'Anthropic (Claude)', shortfall: 500, currency: 840 }));
     expect(byType('on_main_card')).toEqual(['Netflix']);
   });
+
+  it('reports per-card progress and resumes an interrupted backfill', async () => {
+    const id = seedSource(db);
+    const calls: [number, number][] = [];
+    let failAfter = 2;
+    const flaky: BankSource = {
+      kind: 'monobank',
+      maxRangeSeconds: 31 * 86_400,
+      minRequestGapMs: 61_000,
+      listAccounts: async () => [],
+      fetchTransactions: async (_ext, from, to) => {
+        if (failAfter-- <= 0) throw new Error('process killed');
+        calls.push([from, to]);
+        return [];
+      },
+    };
+    await sync.syncSource(id, flaky);
+    expect(sync.status(id)).toMatchObject({ running: false, lastError: 'process killed', done: 2 });
+
+    let sources = (await (await app.request('/api/sources', { headers: auth })).json()) as any;
+    const partial = sources[0].progress[0];
+    expect(partial).toMatchObject({ state: 'error', monthsTotal: 3 });
+    expect(partial.monthsDone).toBeGreaterThan(1.5);
+    expect(partial.monthsDone).toBeLessThan(3);
+
+    // "Restart": a fresh run picks up from the saved point instead of starting over.
+    const before = calls.length;
+    failAfter = Infinity;
+    await sync.syncSource(id, flaky);
+    const resumed = calls.slice(before);
+    expect(Math.max(...resumed.map(c => c[1]))).toBeLessThanOrEqual(Math.min(...calls.slice(0, before).map(c => c[0])) + 3_600 * 24 * 2);
+    sources = (await (await app.request('/api/sources', { headers: auth })).json()) as any;
+    expect(sources[0].progress[0]).toMatchObject({ state: 'done', monthsDone: 3 });
+  });
+
+  it('shows the rate-limit wait and an ETA while running', async () => {
+    const id = seedSource(db);
+    let release!: () => void;
+    const slow: BankSource = {
+      kind: 'monobank',
+      maxRangeSeconds: 31 * 86_400,
+      minRequestGapMs: 61_000,
+      nextRequestAt: () => Date.now() + 30_000,
+      listAccounts: async () => [],
+      fetchTransactions: () => new Promise(r => (release = () => r([]))),
+    };
+    const run = sync.syncSource(id, slow);
+    await new Promise(r => setTimeout(r, 0));
+    const st = sync.status(id);
+    expect(st).toMatchObject({ running: true, state: 'waiting_rate_limit', currentAccountId: `${id}:acc`, done: 0 });
+    expect(st.total).toBeGreaterThanOrEqual(3);
+    expect(st.etaSeconds).toBeGreaterThanOrEqual(30 + (st.total - 1) * 61);
+    const sources = (await (await app.request('/api/sources', { headers: auth })).json()) as any;
+    expect(sources[0].progress[0].state).toBe('syncing');
+    for (let i = 0; i < st.total; i++) {
+      release();
+      await new Promise(r => setTimeout(r, 0));
+    }
+    await run;
+  });
 });

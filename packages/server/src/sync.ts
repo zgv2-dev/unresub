@@ -11,20 +11,35 @@ export interface SyncOptions {
   log?: (msg: string) => void;
 }
 
+export type SyncState = 'idle' | 'fetching' | 'waiting_rate_limit' | 'retrying';
+
 export interface SyncStatus {
   running: boolean;
   phase: 'idle' | 'incremental' | 'backfill';
-  /** Chunks fetched / planned in the current run. */
+  /** Derived at read time: waiting while the next request slot is in the future. */
+  state: SyncState;
+  currentAccountId: string | null;
+  /** Epoch ms of the next allowed request. */
+  nextRequestAt: number | null;
+  /** Requests done / planned in the current run. */
   done: number;
   total: number;
+  etaSeconds: number | null;
+  /** Requests still planned per account in the current run. */
+  remainingByAccount: Record<string, number>;
   lastError: string | null;
   lastFinishedAt: number | null;
+}
+
+interface RunState extends Omit<SyncStatus, 'state' | 'etaSeconds'> {
+  retrying: boolean;
+  gapMs: number;
 }
 
 const nowS = () => Math.floor(Date.now() / 1000);
 
 export class SyncService {
-  #status = new Map<string, SyncStatus>();
+  #status = new Map<string, RunState>();
   #ratesAt = 0;
 
   constructor(private db: Db, private opts: SyncOptions) {}
@@ -51,7 +66,23 @@ export class SyncService {
   }
 
   status(sourceId: string): SyncStatus {
-    return this.#status.get(sourceId) ?? { running: false, phase: 'idle', done: 0, total: 0, lastError: null, lastFinishedAt: null };
+    const r = this.#status.get(sourceId);
+    if (!r) {
+      return {
+        running: false, phase: 'idle', state: 'idle', currentAccountId: null, nextRequestAt: null,
+        done: 0, total: 0, etaSeconds: null, remainingByAccount: {}, lastError: null, lastFinishedAt: null,
+      };
+    }
+    const { retrying, gapMs, ...rest } = r;
+    const now = Date.now();
+    const waitMs = r.nextRequestAt && r.nextRequestAt > now ? r.nextRequestAt - now : 0;
+    const state: SyncState = !r.running ? 'idle' : retrying ? 'retrying' : waitMs > 0 ? 'waiting_rate_limit' : 'fetching';
+    const remaining = r.total - r.done;
+    return {
+      ...rest,
+      state,
+      etaSeconds: r.running ? Math.round((waitMs + Math.max(0, remaining - 1) * gapMs + (remaining > 0 ? 2_000 : 0)) / 1000) : null,
+    };
   }
 
   /** Validates the token, stores it encrypted, registers the webhook, and starts the backfill in the background. */
@@ -95,49 +126,87 @@ export class SyncService {
   async syncSource(sourceId: string, adapter?: BankSource) {
     const row = this.db.getSource(sourceId);
     if (!row) throw new Error(`Unknown source ${sourceId}`);
-    if (this.status(sourceId).running) return;
-    const status: SyncStatus = { ...this.status(sourceId), running: true, phase: 'incremental', done: 0, total: 0, lastError: null };
-    this.#status.set(sourceId, status);
+    if (this.#status.get(sourceId)?.running) return;
     const src = adapter ?? this.adapterFor(row);
+    const status: RunState = {
+      running: true, phase: 'incremental', currentAccountId: null, nextRequestAt: src.nextRequestAt?.() ?? null,
+      done: 0, total: 0, remainingByAccount: {}, lastError: null,
+      lastFinishedAt: this.#status.get(sourceId)?.lastFinishedAt ?? null, retrying: false, gapMs: src.minRequestGapMs ?? 0,
+    };
+    this.#status.set(sourceId, status);
     void this.refreshRates();
 
     try {
       if (!adapter) this.db.upsertAccounts(sourceId, await src.listAccounts());
       const accounts = this.db.accountsBySource(sourceId);
       const end = nowS();
-      const horizon = end - Math.round(this.opts.backfillMonths * 30.44 * 86_400);
+      const horizon = this.horizon(end);
       const step = src.maxRangeSeconds - 60;
 
-      const plan: { accountId: string; externalId: string; from: number; to: number; phase: SyncStatus['phase'] }[] = [];
+      type Chunk = { accountId: string; externalId: string; from: number; to: number; phase: SyncStatus['phase'] };
+      const incremental: Chunk[] = [];
+      const backfill: Chunk[] = [];
       for (const a of accounts) {
         const syncedTo = a.synced_to ?? end - step;
+        const chunks: Chunk[] = [];
         for (let to = end; to > syncedTo; to -= step) {
-          plan.push({ accountId: a.id, externalId: a.external_id, from: Math.max(to - step, syncedTo - 3_600), to, phase: 'incremental' });
+          chunks.push({ accountId: a.id, externalId: a.external_id, from: Math.max(to - step, syncedTo - 3_600), to, phase: 'incremental' });
         }
-      }
-      for (const a of accounts) {
+        // Oldest first, so synced_to only advances past windows that were actually fetched.
+        incremental.push(...chunks.reverse());
         for (let to = a.backfilled_from ?? end - step; to > horizon; to -= step) {
-          plan.push({ accountId: a.id, externalId: a.external_id, from: Math.max(to - step, horizon), to, phase: 'backfill' });
+          backfill.push({ accountId: a.id, externalId: a.external_id, from: Math.max(to - step, horizon), to, phase: 'backfill' });
         }
       }
-      // Newest windows of every account first.
-      plan.sort((x, y) => (x.phase === y.phase ? y.to - x.to : x.phase === 'incremental' ? -1 : 1));
+      // Backfill: newest windows of every account first, so recent subscriptions appear early.
+      // Progress is saved per window, so a restart resumes from accounts.backfilled_from.
+      const plan = [...incremental, ...backfill.sort((x, y) => y.to - x.to)];
       status.total = plan.length;
+      for (const p of plan) status.remainingByAccount[p.accountId] = (status.remainingByAccount[p.accountId] ?? 0) + 1;
 
       for (const p of plan) {
-        status.phase = p.phase;
-        const txns = await src.fetchTransactions(p.externalId, p.from, p.to);
+        Object.assign(status, { phase: p.phase, currentAccountId: p.accountId, nextRequestAt: src.nextRequestAt?.() ?? null });
+        const txns = await this.#fetchWithRetry(src, p, status);
         this.db.insertTransactions(p.accountId, txns);
         this.db.markProgress(p.accountId, p.from, p.to);
         status.done++;
+        status.remainingByAccount[p.accountId]!--;
         this.#log(`${sourceId} ${p.phase} ${new Date(p.from * 1000).toISOString().slice(0, 10)}..${new Date(p.to * 1000).toISOString().slice(0, 10)}: ${txns.length} txns (${status.done}/${status.total})`);
       }
     } catch (e) {
       status.lastError = (e as Error).message;
       this.#log(`${sourceId} failed: ${status.lastError}`);
     } finally {
-      Object.assign(status, { running: false, phase: 'idle', lastFinishedAt: nowS() });
+      Object.assign(status, { running: false, phase: 'idle', currentAccountId: null, retrying: false, lastFinishedAt: nowS() });
     }
+  }
+
+  /** monobank answers 429 when the 1/min limit is hit anyway (e.g. another client uses the token): wait and retry. */
+  async #fetchWithRetry(src: BankSource, p: { externalId: string; from: number; to: number }, status: RunState) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const txns = await src.fetchTransactions(p.externalId, p.from, p.to);
+        status.retrying = false;
+        return txns;
+      } catch (e) {
+        if ((e as { status?: number }).status !== 429 || attempt >= 3) throw e;
+        status.retrying = true;
+        // A throttled adapter already spaces the retry by its own gap; otherwise wait a minute.
+        if (src.nextRequestAt) status.nextRequestAt = src.nextRequestAt();
+        else {
+          status.nextRequestAt = Date.now() + 60_000;
+          await new Promise(r => setTimeout(r, 60_000));
+        }
+      }
+    }
+  }
+
+  horizon(end = nowS()) {
+    return end - Math.round(this.opts.backfillMonths * 30.44 * 86_400);
+  }
+
+  get backfillMonths() {
+    return this.opts.backfillMonths;
   }
 
   syncAll() {

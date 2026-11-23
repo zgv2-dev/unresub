@@ -76,7 +76,37 @@ export interface Source {
   kind: string;
   name: string;
   webhookUrl: string | null;
-  sync: { running: boolean; phase: string; done: number; total: number; lastError: string | null; lastFinishedAt: number | null };
+  sync: SyncStatus;
+  progress: AccountProgress[];
+}
+
+export interface SyncStatus {
+  running: boolean;
+  phase: 'idle' | 'incremental' | 'backfill';
+  state: 'idle' | 'fetching' | 'waiting_rate_limit' | 'retrying';
+  currentAccountId: string | null;
+  /** Epoch ms of the next allowed bank request */
+  nextRequestAt: number | null;
+  /** Requests done / planned in the current run */
+  done: number;
+  total: number;
+  etaSeconds: number | null;
+  remainingByAccount: Record<string, number>;
+  lastError: string | null;
+  lastFinishedAt: number | null;
+}
+
+/** Per card, derived from stored data, so it survives server restarts. */
+export interface AccountProgress {
+  accountId: string;
+  maskedPan: string | null;
+  currency: number;
+  type: string | null;
+  monthsDone: number;
+  monthsTotal: number;
+  historyFrom: number | null;
+  syncedTo: number | null;
+  state: 'syncing' | 'queued' | 'done' | 'error' | 'pending';
 }
 
 export interface Account {
