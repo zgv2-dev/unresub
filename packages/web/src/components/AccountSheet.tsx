@@ -45,16 +45,19 @@ export const AccountSheet = ({ user, onClose, onLogout }: { user: User; onClose:
   };
 
   return (
-    <Sheet onClose={onClose} label="Account">
-      <div className="sheet-head">
-        <span className="avatar static">{user.username.slice(0, 2).toUpperCase()}</span>
-        <div>
-          <h2>{user.username}</h2>
-          <div className="muted small">{user.isAdmin ? 'Admin · ' : ''}since {fmtDate(user.createdAt)}</div>
-        </div>
-        <button className="icon-btn sheet-close" onClick={onClose} aria-label="Close"><Icon name="x" /></button>
-      </div>
-
+    <Sheet
+      onClose={onClose}
+      label="Account"
+      head={
+        <>
+          <span className="avatar static">{user.username.slice(0, 2).toUpperCase()}</span>
+          <div>
+            <h2>{user.username}</h2>
+            <div className="muted small">{user.isAdmin ? 'Admin · ' : ''}since {fmtDate(user.createdAt)}</div>
+          </div>
+        </>
+      }
+    >
       {msg && <p className={`small ${msg.ok ? 'muted' : 'error'}`}>{msg.text}</p>}
 
       <div className="divider-title">Password</div>

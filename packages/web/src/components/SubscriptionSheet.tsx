@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { formatMoney, LOCAL_CURRENCY, type Period } from '@unresub/core';
 import { api, type CatalogEntry, type SubscriptionItem } from '../api.ts';
 import { fmtDate, PERIOD_LABEL, PERIOD_OPTIONS, PERIOD_SHORT, relative } from '../format.ts';
@@ -20,6 +20,7 @@ type Props = {
 };
 
 export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide }: Props) => {
+  const formId = useId();
   const [name, setName] = useState(s.needsDetails ? '' : s.name);
   const [serviceId, setServiceId] = useState(s.serviceId ?? '');
   const [period, setPeriod] = useState<Period>(s.period);
@@ -69,19 +70,28 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
   };
 
   return (
-    <Sheet onClose={onClose} label={s.name}>
-      <div className="sheet-head">
-        <ServiceIcon serviceId={serviceId || s.serviceId} name={name || s.name} size="lg" />
-        <div>
-          <h2>{name || s.name}</h2>
-          <div className="muted num">
-            {formatMoney(s.price, s.currency)} · {PERIOD_LABEL[s.period].toLowerCase()}
-            {foreign && <span className="faint"> · {formatMoney(s.localPrice, LOCAL_CURRENCY)}</span>}
+    <Sheet
+      onClose={onClose}
+      label={s.name}
+      head={
+        <>
+          <ServiceIcon serviceId={serviceId || s.serviceId} name={name || s.name} size="lg" />
+          <div>
+            <h2>{name || s.name}</h2>
+            <div className="muted num">
+              {formatMoney(s.price, s.currency)} · {PERIOD_LABEL[s.period].toLowerCase()}
+              {foreign && <span className="faint"> · {formatMoney(s.localPrice, LOCAL_CURRENCY)}</span>}
+            </div>
           </div>
-        </div>
-        <button className="icon-btn sheet-close" onClick={onClose} aria-label="Close"><Icon name="x" /></button>
-      </div>
-
+        </>
+      }
+      footer={
+        <>
+          {err && <p className="error small">{err}</p>}
+          <button className="btn block" form={formId} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
+        </>
+      }
+    >
       {s.needsDetails && (
         <div className="callout">
           We don't know this merchant yet. Pick the service or give it a name so it is easy to recognise.
@@ -97,7 +107,7 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
         <div>
           <span>Card</span>
           <strong>{s.account?.maskedPan ? `•••• ${s.account.maskedPan.slice(-4)}` : '—'}</strong>
-          <em>{s.account?.isSubscriptionCard ? 'subscriptions card' : s.onMainCard ? 'main card, move it' : s.account?.type ?? ''}</em>
+          <em>{s.account?.isSubscriptionCard ? 'Subscriptions card' : s.onMainCard ? 'Main card · move to the subscriptions card' : s.account?.type ?? ''}</em>
         </div>
         <div>
           <span>Per month</span>
@@ -132,7 +142,7 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
         )}
       </div>
 
-      <form className="stack" onSubmit={e => (e.preventDefault(), void save())}>
+      <form id={formId} className="stack" onSubmit={e => (e.preventDefault(), void save())}>
         <div className="divider-title">Details</div>
         <div className="field">
           <span>Service</span>
@@ -163,8 +173,6 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
         <p className="xs faint">
           {s.periodCorrected ? 'Period set by you; the next date follows it. ' : ''}Bank description <code>{s.detectedName}</code> · {s.chargeCount} charges seen{foreign && ` · rate ${s.rate.toFixed(2)}`}
         </p>
-        {err && <p className="error small">{err}</p>}
-        <button className="btn block" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
       </form>
 
       <div className="stack fix">

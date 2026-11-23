@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useId, useState, type FormEvent } from 'react';
 import { formatMoney, type Period } from '@unresub/core';
 import { api, type CatalogEntry, type SimilarResponse, type TransactionRow } from '../api.ts';
 import { fmtDate, PERIOD_OPTIONS } from '../format.ts';
@@ -17,6 +17,7 @@ type Props = {
 };
 
 export const TransactionSheet = ({ t, catalog, onClose, onOpenSubscription, onCreated }: Props) => {
+  const formId = useId();
   const [similar, setSimilar] = useState<SimilarResponse | null>(null);
   const [making, setMaking] = useState(false);
   const [name, setName] = useState('');
@@ -62,20 +63,31 @@ export const TransactionSheet = ({ t, catalog, onClose, onOpenSubscription, onCr
   const amount = formatMoney(Math.abs(t.operationAmount), t.operationCurrency);
 
   return (
-    <Sheet onClose={onClose} label={t.description}>
-      <div className="sheet-head">
-        <ServiceIcon serviceId={serviceId || null} name={t.counterName || t.description} size="lg" />
-        <div>
-          <h2>{t.description}</h2>
-          <div className="muted num">
-            {t.amount > 0 ? '+' : '−'}{formatMoney(Math.abs(t.amount), t.accountCurrency)}
-            {t.operationCurrency !== t.accountCurrency && <span className="faint"> · {amount}</span>}
-            <span className="faint"> · {fmtDate(t.time)}</span>
+    <Sheet
+      onClose={onClose}
+      label={t.description}
+      head={
+        <>
+          <ServiceIcon serviceId={serviceId || null} name={t.counterName || t.description} size="lg" />
+          <div>
+            <h2>{t.description}</h2>
+            <div className="muted num">
+              {t.amount > 0 ? '+' : '−'}{formatMoney(Math.abs(t.amount), t.accountCurrency)}
+              {t.operationCurrency !== t.accountCurrency && <span className="faint"> · {amount}</span>}
+              <span className="faint"> · {fmtDate(t.time)}</span>
+            </div>
           </div>
-        </div>
-        <button className="icon-btn sheet-close" onClick={onClose} aria-label="Close"><Icon name="x" /></button>
-      </div>
-
+        </>
+      }
+      footer={
+        charge && !owned && making ? (
+          <>
+            {err && <p className="error small">{err}</p>}
+            <button className="btn block" form={formId} disabled={busy || !name.trim()}>{busy ? 'Saving…' : `Add subscription${attach.size ? ` with ${attach.size + 1} charges` : ''}`}</button>
+          </>
+        ) : undefined
+      }
+    >
       {owned && (
         <div className="fix-row" style={{ marginBottom: 16 }}>
           <span>
@@ -95,7 +107,7 @@ export const TransactionSheet = ({ t, catalog, onClose, onOpenSubscription, onCr
       )}
 
       {charge && !owned && making && (
-        <form className="stack" onSubmit={e => void create(e)}>
+        <form id={formId} className="stack" onSubmit={e => void create(e)}>
           <div className="divider-title">New subscription</div>
           <div className="field">
             <span>Service</span>
@@ -138,8 +150,6 @@ export const TransactionSheet = ({ t, catalog, onClose, onOpenSubscription, onCr
             </>
           )}
 
-          {err && <p className="error small">{err}</p>}
-          <button className="btn block" disabled={busy || !name.trim()}>{busy ? 'Saving…' : `Add subscription${attach.size ? ` with ${attach.size + 1} charges` : ''}`}</button>
         </form>
       )}
 
