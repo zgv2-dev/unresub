@@ -64,7 +64,7 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
   };
 };
 
-export const createApp = (db: Db, sync: SyncService, apiToken: string) => {
+export const createApp = (db: Db, sync: SyncService, apiToken: string, corsOrigins: string[] = []) => {
   const app = new Hono();
 
   app.onError((err, c) => {
@@ -96,8 +96,11 @@ export const createApp = (db: Db, sync: SyncService, apiToken: string) => {
   });
 
   // --- API (bearer token) ---
-  // The Android app (Capacitor WebView) calls the API from https://localhost.
-  app.use('/api/*', cors({ origin: ['https://localhost', 'capacitor://localhost'], allowHeaders: ['Authorization', 'Content-Type'] }));
+  // The Android app (Capacitor WebView) calls the API from https://localhost; the Vercel-hosted UI from CORS_ORIGINS.
+  app.use(
+    '/api/*',
+    cors({ origin: ['https://localhost', 'capacitor://localhost', ...corsOrigins], allowHeaders: ['Authorization', 'Content-Type'] }),
+  );
   const api = new Hono();
   api.use('*', bearerAuth({ verifyToken: token => safeEqual(token, apiToken) }));
 

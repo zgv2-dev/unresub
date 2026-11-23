@@ -9,7 +9,7 @@ import { SyncService } from './sync.ts';
 
 const db = openDb(env.dbPath);
 const sync = new SyncService(db, { key: env.secretKey, publicUrl: env.publicUrl, backfillMonths: env.backfillMonths });
-const app = createApp(db, sync, env.apiToken);
+const app = createApp(db, sync, env.apiToken, env.corsOrigins);
 
 // Serve the built web UI in production.
 const webDist = fileURLToPath(new URL('../../web/dist', import.meta.url));
