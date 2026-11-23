@@ -390,4 +390,39 @@ describe('server', () => {
       expect((await get('/api/subscriptions')).items).toHaveLength(2);
     });
   });
+
+  describe('subscription history', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const get = async (path: string) => (await (await app.request(path, { headers: auth })).json()) as any;
+    const post = (path: string, body: object) =>
+      app.request(path, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+    it('lists charges newest first with UAH, price changes, card moves and a total; unlink sends one back', async () => {
+      const id = seedSource(db);
+      db.upsertAccounts(id, [{ externalId: 'usd', currency: 840, balance: 0, creditLimit: 0, maskedPan: '4444****2222', iban: null, type: 'black' }]);
+      core.insertRates(now - 400 * 86_400, [{ currency: 840, buy: 41, sell: 42 }]);
+      const old = makeSeries({ description: 'ANTHROPIC', period: 'monthly', price: 2_000, currency: 840, rate: 41, count: 3, last: addPeriod(now - 5 * 86_400, 'monthly', -1) });
+      const latest = makeSeries({ description: 'ANTHROPIC', period: 'monthly', price: 2_200, currency: 840, count: 1, last: now - 5 * 86_400 });
+      db.insertTransactions(`${id}:acc`, old.map(({ accountId: _, ...t }) => ({ ...t, accountExternalId: 'acc', raw: null })));
+      db.insertTransactions(`${id}:usd`, latest.map(({ accountId: _, ...t }) => ({ ...t, accountExternalId: 'usd', accountCurrency: 840, amount: t.operationAmount, raw: null })));
+      const [sub] = (await get('/api/subscriptions')).items;
+
+      const h = await get(`/api/subscriptions/${encodeURIComponent(sub.key)}/transactions`);
+      expect(h.count).toBe(4);
+      expect(h.items[0]).toMatchObject({ price: 2_200, local: 92_400, rate: 42, movedFrom: { id: `${id}:acc` }, priceChange: { from: 2_000, delta: 200, pct: 10 }, card: { id: `${id}:usd` } });
+      expect(h.items[1]).toMatchObject({ price: 2_000, local: 82_000, movedFrom: null, priceChange: null });
+      expect(h.totalLocal).toBe(92_400 + 3 * 82_000);
+      expect(h.totalByCurrency).toEqual({ 840: 8_200 });
+
+      const wrong = h.items[1].id; // a charge in the middle: the series must survive the gap
+      expect((await post(`/api/subscriptions/${encodeURIComponent(sub.key)}/unlink`, { transactionId: 'nope' })).status).toBe(404);
+      expect((await post(`/api/subscriptions/${encodeURIComponent(sub.key)}/unlink`, { transactionId: wrong })).status).toBe(204);
+      expect((await get(`/api/subscriptions/${encodeURIComponent(sub.key)}/transactions`)).count).toBe(3);
+      const row = (await get('/api/transactions')).items.find((t: any) => t.id === wrong);
+      expect(row).toMatchObject({ subscriptionKey: null, excluded: true });
+
+      await app.request(`/api/excluded-transactions/${encodeURIComponent(wrong)}`, { method: 'DELETE', headers: auth });
+      expect((await get(`/api/subscriptions/${encodeURIComponent(sub.key)}/transactions`)).count).toBe(4);
+    });
+  });
 });

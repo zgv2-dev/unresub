@@ -6,6 +6,9 @@ import {
   applyCorrections,
   buildManualSubscriptions,
   extendWithSwitchedCharges,
+  LOCAL_CURRENCY,
+  localAmountOf,
+  toMajor,
   linkCardSwitches,
   groupKeyOf,
   matchService,
@@ -43,7 +46,9 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
   const hasSubCard = [...accounts.values()].some(a => a.is_subscription_card);
   const overrides = new Map(db.listOverrides().map(o => [o.key, o]));
   const splitGroups = db.splitGroups();
-  const transactions = db.listTransactions();
+  // Charges the user unlinked stay out of every subscription.
+  const excluded = db.excludedIds();
+  const transactions = db.listTransactions().filter(t => !excluded.has(t.id));
   // Manual subscriptions claim their transactions first, so detection doesn't count them twice.
   const manual = buildManualSubscriptions(db.listManual(), transactions, { now, toLocal: sync.toLocal });
   // A subscription moved to a card with another charge currency: continue the old series with the
@@ -540,13 +545,15 @@ export const createApp = (deps: AppDeps) => {
     for (const i of view.items) for (const id of i.transactionIds) owner.set(id, { key: i.key, name: i.name, hidden: i.userStatus === 'ignored' });
     return { owner, view };
   };
-  const toRow = (t: ReturnType<Db['listTransactions']>[number], owner: Map<string, { key: string; name: string; hidden: boolean }>) => {
+  const toRow = (t: ReturnType<Db['listTransactions']>[number], owner: Map<string, { key: string; name: string; hidden: boolean }>, excluded?: Set<string>) => {
     const o = owner.get(t.id);
     return {
       ...t,
       subscriptionKey: o?.key ?? null,
       subscriptionName: o?.name ?? null,
       hidden: o?.hidden ?? false,
+      /** Unlinked from a subscription by the user. */
+      excluded: excluded?.has(t.id) ?? false,
     };
   };
 
@@ -560,6 +567,7 @@ export const createApp = (deps: AppDeps) => {
     const offset = num(p.offset) ?? 0;
     const q = p.q?.trim().toLowerCase();
     const { owner } = txnView(db, sync);
+    const excluded = db.excludedIds();
     const rows = db
       .listTransactions(from ?? 0)
       .filter(t =>
@@ -572,7 +580,7 @@ export const createApp = (deps: AppDeps) => {
         (p.unassigned !== '1' || !owner.has(t.id)),
       )
       .reverse();
-    return c.json({ total: rows.length, items: rows.slice(offset, offset + limit).map(t => toRow(t, owner)) });
+    return c.json({ total: rows.length, items: rows.slice(offset, offset + limit).map(t => toRow(t, owner, excluded)) });
   });
 
   /** Other debits from the same merchant, to attach when creating a subscription by hand. */
@@ -583,16 +591,18 @@ export const createApp = (deps: AppDeps) => {
     if (!t) throw new HTTPException(404);
     const groupKey = groupKeyOf(t);
     const { owner } = txnView(db, sync);
+    const excluded = db.excludedIds();
     const amount = Math.abs(t.operationAmount);
     const items = all
       .filter(x => x.id !== t.id && x.operationAmount < 0 && groupKey && groupKeyOf(x) === groupKey)
       .reverse()
       .slice(0, 50)
-      .map(x => ({ ...toRow(x, owner), sameAmount: Math.abs(Math.abs(x.operationAmount) - amount) <= amount * 0.03 }));
+      
+      .map(x => ({ ...toRow(x, owner, excluded), sameAmount: Math.abs(Math.abs(x.operationAmount) - amount) <= amount * 0.03 }));
     const service = matchService(t.description);
     const cleaned = t.description.replace(/\s*[#№]?\d{3,}\S*/g, '').trim() || t.description;
     return c.json({
-      transaction: toRow(t, owner),
+      transaction: toRow(t, owner, excluded),
       groupKey,
       merchant: merchantKey(t.description),
       suggested: { name: service?.name ?? t.counterName ?? cleaned, serviceId: service?.id ?? null },
@@ -611,6 +621,7 @@ export const createApp = (deps: AppDeps) => {
     const groupKey = groupKeyOf(t);
     const key = `manual:${randomToken(6)}`;
     const ids = [...new Set([t.id, ...(body.attachIds ?? [])])].slice(0, 500);
+    db.unexcludeTransactions(ids); // attaching by hand overrides an earlier unlink
     db.insertManual({
       key,
       groupKey: groupKey || `txn:${t.id}`, // no usable merchant: only the attached charges count
@@ -627,6 +638,71 @@ export const createApp = (deps: AppDeps) => {
     const { db, sync } = c.var.tenant;
     if (!c.req.param('key').startsWith('manual:')) throw new HTTPException(400, { message: 'Not a manual subscription' });
     db.deleteManual(c.req.param('key'));
+    return c.body(null, 204);
+  });
+
+  /** Charge history of one subscription, newest first, with UAH at each charge's rate and what changed. */
+  api.get('/subscriptions/:key/transactions', async c => {
+    const { db, sync } = c.var.tenant;
+    await sync.refreshRates();
+    const item = buildSubscriptionsView(db, sync).items.find(i => i.key === c.req.param('key'));
+    if (!item) throw new HTTPException(404);
+    const accounts = new Map(db.listAccounts().map(a => [a.id, a]));
+    const ids = new Set(item.transactionIds);
+    const chrono = db.listTransactions().filter(t => ids.has(t.id)).toSorted((a, b) => a.time - b.time);
+    const rows = chrono.map((t, i) => {
+      const prev = chrono[i - 1];
+      const local = localAmountOf(t, sync.toLocal);
+      const price = Math.abs(t.operationAmount);
+      const prevPrice = prev && prev.operationCurrency === t.operationCurrency ? Math.abs(prev.operationAmount) : null;
+      const card = accounts.get(t.accountId);
+      const prevCard = prev && prev.accountId !== t.accountId ? accounts.get(prev.accountId) : undefined;
+      return {
+        id: t.id,
+        time: t.time,
+        description: t.description,
+        price,
+        currency: t.operationCurrency,
+        /** UAH at this charge's own rate; null when no rate is known. */
+        local,
+        rate: local ? Math.round((toMajor(local, LOCAL_CURRENCY) / toMajor(price, t.operationCurrency)) * 10_000) / 10_000 : null,
+        hold: !!t.hold,
+        card: card ? { id: card.id, maskedPan: card.masked_pan, currency: card.currency } : null,
+        /** Set on the first charge after the subscription moved cards. */
+        movedFrom: prev && prev.accountId !== t.accountId ? { id: prev.accountId, maskedPan: prevCard?.masked_pan ?? null } : null,
+        /** Price difference to the previous charge in the same currency (merchant currency, minor units). */
+        priceChange: prevPrice != null && prevPrice !== price ? { from: prevPrice, delta: price - prevPrice, pct: Math.round(((price - prevPrice) / prevPrice) * 1_000) / 10 } : null,
+        currencyChanged: !!prev && prev.operationCurrency !== t.operationCurrency,
+      };
+    });
+    const byCurrency: Record<string, number> = {};
+    for (const r of rows) byCurrency[r.currency] = (byCurrency[r.currency] ?? 0) + r.price;
+    return c.json({
+      key: item.key,
+      count: rows.length,
+      totalLocal: rows.reduce((s, r) => s + (r.local ?? 0), 0),
+      totalByCurrency: byCurrency,
+      since: chrono[0]?.time ?? null,
+      items: rows.reverse(),
+    });
+  });
+
+  /** Unlink a wrongly attached charge: it goes back to Transactions and stays out of detection. */
+  api.post('/subscriptions/:key/unlink', async c => {
+    const { db, sync } = c.var.tenant;
+    const key = c.req.param('key');
+    const { transactionId } = await c.req.json<{ transactionId: string }>();
+    const item = buildSubscriptionsView(db, sync).items.find(i => i.key === key);
+    if (!item?.transactionIds.includes(transactionId)) throw new HTTPException(404, { message: 'Charge is not part of this subscription' });
+    db.excludeTransaction(transactionId, key);
+    const manual = db.listManual().find(m => m.transactionIds.includes(transactionId));
+    if (manual) db.setManualTransactionIds(manual.key, manual.transactionIds.filter(id => id !== transactionId));
+    return c.body(null, 204);
+  });
+
+  /** Undo an unlink. */
+  api.delete('/excluded-transactions/:id', c => {
+    c.var.tenant.db.unexcludeTransactions([c.req.param('id')]);
     return c.body(null, 204);
   });
 

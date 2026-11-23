@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS manual_subscriptions (
   created_at   INTEGER NOT NULL
 );
 
+-- Charges the user unlinked from a subscription: left out of detection and manual matching.
+CREATE TABLE IF NOT EXISTS excluded_transactions (
+  txn_id           TEXT PRIMARY KEY,
+  subscription_key TEXT,
+  created_at       INTEGER NOT NULL
+);
+
 -- Merchant groups the user split into separate subscriptions by price.
 CREATE TABLE IF NOT EXISTS split_groups (
   group_key  TEXT PRIMARY KEY,
@@ -181,6 +188,10 @@ export const openDb = (path: string) => {
     ),
     deleteManual: db.prepare('DELETE FROM manual_subscriptions WHERE key = ?'),
     txn: db.prepare('SELECT id FROM transactions WHERE id = ?'),
+    excluded: db.prepare('SELECT txn_id FROM excluded_transactions'),
+    exclude: db.prepare('INSERT OR REPLACE INTO excluded_transactions (txn_id, subscription_key, created_at) VALUES (?, ?, ?)'),
+    unexclude: db.prepare('DELETE FROM excluded_transactions WHERE txn_id = ?'),
+    setManualTxns: db.prepare('UPDATE manual_subscriptions SET txn_ids = ? WHERE key = ?'),
     splitGroups: db.prepare('SELECT group_key FROM split_groups'),
     addSplit: db.prepare('INSERT OR IGNORE INTO split_groups (group_key, created_at) VALUES (?, ?)'),
     removeSplit: db.prepare('DELETE FROM split_groups WHERE group_key = ?'),
@@ -262,6 +273,10 @@ export const openDb = (path: string) => {
     insertManual: (m: ManualSubscription) =>
       void q.insertManual.run(m.key, m.groupKey, m.matchAmount, m.period, m.name, m.serviceId, JSON.stringify(m.transactionIds), now()),
     deleteManual: (key: string) => void q.deleteManual.run(key),
+    excludedIds: () => new Set((q.excluded.all() as { txn_id: string }[]).map(r => r.txn_id)),
+    excludeTransaction: (txnId: string, subscriptionKey: string | null) => void q.exclude.run(txnId, subscriptionKey, now()),
+    unexcludeTransactions: (ids: string[]) => ids.forEach(id => q.unexclude.run(id)),
+    setManualTransactionIds: (key: string, ids: string[]) => void q.setManualTxns.run(JSON.stringify(ids), key),
     splitGroups: () => new Set((q.splitGroups.all() as { group_key: string }[]).map(r => r.group_key)),
     setSplit: (groupKey: string, split: boolean) => void (split ? q.addSplit.run(groupKey, now()) : q.removeSplit.run(groupKey)),
   };

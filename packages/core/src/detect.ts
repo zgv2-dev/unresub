@@ -86,7 +86,8 @@ const evaluate = (series: Transaction[], requireMinWeekly: boolean): SeriesEval 
   // Two charges on the same day are noise (retries, split payments); ignore those gaps.
   const real = intervals.filter(d => d >= 1);
   if (!real.length) return null;
-  const period = classifyPeriod(median(real));
+  // A skipped or unlinked charge doubles one gap and can push the median off; fall back to the shortest gap.
+  const period = classifyPeriod(median(real)) ?? classifyPeriod(Math.min(...real));
   if (!period) return null;
   if (period === 'weekly' && requireMinWeekly && series.length < 4) return null;
   const reg = regularity(real, period);
