@@ -15,8 +15,8 @@ export interface DetectOptions {
   catalog?: ServiceDefinition[];
   /** Drop series under this confidence. */
   minConfidence?: number;
-  /** Converts a foreign-currency amount to local minor units when the account itself isn't in UAH. */
-  toLocal?: (minor: number, currency: CurrencyCode) => number | null;
+  /** Converts a foreign-currency amount to local minor units at (or near) `time`, for accounts not in UAH. */
+  toLocal?: (minor: number, currency: CurrencyCode, time: number) => number | null;
 }
 
 const DAY = 86_400;
@@ -70,7 +70,7 @@ const localAmountOf = (t: Transaction, toLocal: DetectOptions['toLocal']) =>
     ? Math.abs(t.amount)
     : t.operationCurrency === LOCAL_CURRENCY
       ? Math.abs(t.operationAmount)
-      : toLocal?.(Math.abs(t.operationAmount), t.operationCurrency) ?? null;
+      : toLocal?.(Math.abs(t.operationAmount), t.operationCurrency, t.time) ?? null;
 
 interface SeriesEval {
   period: Period;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { formatMoney, LOCAL_CURRENCY, type Period } from '@unresub/core';
+import { formatMoney, LOCAL_CURRENCY, type Alert, type Period } from '@unresub/core';
 import {
   api,
   ApiError,
@@ -101,6 +101,8 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
 
       {error && <p className="error">{error}</p>}
 
+      {data && <AlertBanner alerts={data.alerts} />}
+
       {data && (
         <section className="totals card">
           <div>
@@ -127,13 +129,15 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
         </div>
         {data && !active.length && <p className="muted">No subscriptions detected yet{syncing ? ', still syncing…' : '.'}</p>}
         <ul className="list">
-          {active.map(s => <SubscriptionRow key={s.key} s={s} onEdit={() => setEditing(s)} />)}
+          {active.map(s => (
+            <SubscriptionRow key={s.key} s={s} lowBalance={data?.alerts.some(a => a.type === 'low_balance' && a.key === s.key) ?? false} onEdit={() => setEditing(s)} />
+          ))}
         </ul>
         {!!stale.length && (
           <>
             <h3 className="muted">Possibly cancelled</h3>
             <ul className="list dim">
-              {stale.map(s => <SubscriptionRow key={s.key} s={s} onEdit={() => setEditing(s)} />)}
+              {stale.map(s => <SubscriptionRow key={s.key} s={s} lowBalance={false} onEdit={() => setEditing(s)} />)}
             </ul>
           </>
         )}
@@ -153,11 +157,11 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
   );
 };
 
-const SubscriptionRow = ({ s, onEdit }: { s: SubscriptionItem; onEdit: () => void }) => {
-  const foreign = s.currency !== LOCAL_CURRENCY;
+const SubscriptionRow = ({ s, lowBalance, onEdit }: { s: SubscriptionItem; lowBalance: boolean; onEdit: () => void }) => {
+  const foreign = s.currency !== LOCAL_CURRENCY && s.localPrice > 0;
   const days = daysUntil(s.nextChargeAt);
   return (
-    <li className={`card sub ${days <= 1 && s.status === 'active' ? 'soon' : ''}`}>
+    <li className={`card sub ${days <= 1 && s.status === 'active' ? 'soon' : ''} ${s.onMainCard ? 'main-card' : ''}`}>
       <div className="grow">
         <div className="row gap">
           <strong>{s.name}</strong>
@@ -165,6 +169,7 @@ const SubscriptionRow = ({ s, onEdit }: { s: SubscriptionItem; onEdit: () => voi
           {s.status === 'overdue' && <span className="badge warn">charge late</span>}
           {s.userStatus === 'ignored' && <span className="badge">ignored</span>}
           {s.onMainCard && <span className="badge warn">on main card</span>}
+          {lowBalance && <span className="badge danger">not enough on subs card</span>}
           {s.confidence < 0.6 && !s.userStatus && <span className="badge">maybe</span>}
         </div>
         <div className="muted small">
@@ -179,7 +184,7 @@ const SubscriptionRow = ({ s, onEdit }: { s: SubscriptionItem; onEdit: () => voi
       </div>
       <div className="price">
         <strong>{formatMoney(s.price, s.currency)}</strong>
-        {foreign && s.localPrice > 0 && (
+        {foreign && (
           <span className="muted small" title={`Rate at last charge: ${s.rate}`}>
             {formatMoney(s.localPrice, LOCAL_CURRENCY)}
           </span>
@@ -199,6 +204,7 @@ const EditDialog = ({ s, catalog, onClose, onSaved }: { s: SubscriptionItem; cat
   const [period, setPeriod] = useState<Period>(s.period);
   const [cancelUrl, setCancelUrl] = useState(s.cancelUrl ?? '');
   const [notes, setNotes] = useState(s.notes ?? '');
+  const [remindDays, setRemindDays] = useState(s.remindDays ?? 1);
   const [err, setErr] = useState<string | null>(null);
 
   const save = async (status: SubscriptionItem['userStatus'] = s.userStatus ?? 'confirmed') => {
@@ -209,6 +215,7 @@ const EditDialog = ({ s, catalog, onClose, onSaved }: { s: SubscriptionItem; cat
         period,
         cancelUrl: cancelUrl.trim() || null,
         notes: notes.trim() || null,
+        remindDays,
         status,
       });
       onSaved();
@@ -244,6 +251,10 @@ const EditDialog = ({ s, catalog, onClose, onSaved }: { s: SubscriptionItem; cat
         <label>
           Cancel / manage URL
           <input value={cancelUrl} onChange={e => setCancelUrl(e.target.value)} placeholder="https://…" />
+        </label>
+        <label>
+          Remind me (days before)
+          <input type="number" min={0} max={30} value={remindDays} onChange={e => setRemindDays(Math.max(0, Math.min(30, Number(e.target.value) || 0)))} />
         </label>
         <label>
           Notes
@@ -330,6 +341,42 @@ const Connections = ({ sources, accounts, onChange }: { sources: Source[]; accou
         <button disabled={busy || !token.trim()}>{busy ? 'Connecting…' : 'Connect'}</button>
         {msg && <p className="small">{msg}</p>}
       </form>
+    </section>
+  );
+};
+
+/** Not dismissable on purpose: it goes away when the charge is detected or the balance is topped up. */
+const AlertBanner = ({ alerts }: { alerts: Alert[] }) => {
+  const upcoming = alerts.filter(a => a.type === 'upcoming_charge');
+  const low = alerts.filter(a => a.type === 'low_balance');
+  const onMain = alerts.filter(a => a.type === 'on_main_card');
+  if (!alerts.length) return null;
+  // Show only the last (largest) shortfall per card.
+  const lowByCard = [...new Map(low.map(a => [a.accountId, a])).values()];
+  return (
+    <section className="stack alerts" role="status">
+      {lowByCard.map(a => (
+        <div key={a.accountId} className="alert danger">
+          <strong>Top up the subscriptions card by {formatMoney(a.shortfall, a.currency)}</strong>
+          <span className="small">
+            Charges due by {dateFmt.format(a.chargeAt * 1000)} need {formatMoney(a.required, a.currency)}, the card has {formatMoney(a.balance, a.currency)}.
+          </span>
+        </div>
+      ))}
+      {upcoming.map(a => (
+        <div key={a.key} className="alert">
+          <strong>{a.overdue ? `${a.name}: charge expected` : `${a.name} charges ${relative(a.chargeAt)}`}</strong>
+          <span className="small">
+            {formatMoney(a.price, a.currency)} · {a.overdue ? `was due ${dateFmt.format(a.chargeAt * 1000)}, not seen yet` : dateFmt.format(a.chargeAt * 1000)}
+          </span>
+        </div>
+      ))}
+      {!!onMain.length && (
+        <div className="alert subtle">
+          <strong>{onMain.length} {onMain.length === 1 ? 'subscription is' : 'subscriptions are'} still on the main card</strong>
+          <span className="small">{onMain.map(a => a.name).join(', ')}</span>
+        </div>
+      )}
     </section>
   );
 };

@@ -4,6 +4,7 @@ import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import {
   annualEquivalent,
+  computeAlerts,
   detectSubscriptions,
   monthlyEquivalent,
   SERVICE_CATALOG,
@@ -17,7 +18,7 @@ import type { SyncService } from './sync.ts';
 
 const PERIODS: Period[] = ['weekly', 'monthly', 'quarterly', 'semiannual', 'annual'];
 
-export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'>, now = Math.floor(Date.now() / 1000)) => {
+export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal' | 'convert'>, now = Math.floor(Date.now() / 1000)) => {
   const accounts = new Map(db.listAccounts().map(a => [a.id, a]));
   const hasSubCard = [...accounts.values()].some(a => a.is_subscription_card);
   const overrides = new Map(db.listOverrides().map(o => [o.key, o]));
@@ -42,19 +43,30 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
       annualLocal: annualEquivalent(d.localPrice, period),
       cancelUrl: o.cancel_url ?? service?.cancelUrl ?? null,
       notes: o.notes ?? null,
+      remindDays: o.remind_days ?? null,
       userStatus: o.status ?? null,
       needsDetails: !serviceId && !o.name,
       account: account
         ? { id: account.id, maskedPan: account.masked_pan, type: account.type, isSubscriptionCard: !!account.is_subscription_card }
         : null,
       /** Ready for the "move it to your subscriptions card" hint. */
-      onMainCard: hasSubCard && !!account && !account.is_subscription_card,
+      onMainCard: hasSubCard && !!account && !account.is_subscription_card && o.status !== 'ignored',
     };
   });
+
+  const alerts = computeAlerts(
+    items.map(i => ({
+      key: i.key, name: i.name, nextChargeAt: i.nextChargeAt, price: i.price, currency: i.currency,
+      accountId: i.accountId, status: i.status, ignored: i.userStatus === 'ignored', remindDays: i.remindDays,
+    })),
+    [...accounts.values()].map(a => ({ id: a.id, currency: a.currency, balance: a.balance, isSubscriptionCard: !!a.is_subscription_card })),
+    { now, convert: sync.convert },
+  );
 
   const counted = items.filter(i => i.userStatus !== 'ignored' && i.status !== 'possibly_cancelled');
   return {
     items,
+    alerts,
     totals: {
       monthlyLocal: counted.reduce((s, i) => s + i.monthlyLocal, 0),
       annualLocal: counted.reduce((s, i) => s + i.annualLocal, 0),
@@ -167,6 +179,9 @@ export const createApp = (db: Db, sync: SyncService, apiToken: string, corsOrigi
     const body = await c.req.json<Partial<{ name: string | null; serviceId: string | null; period: Period | null; status: 'confirmed' | 'ignored' | null; cancelUrl: string | null; notes: string | null; remindDays: number | null }>>();
     if (body.period && !PERIODS.includes(body.period)) throw new HTTPException(400, { message: 'Bad period' });
     if (body.serviceId && !serviceById(body.serviceId)) throw new HTTPException(400, { message: 'Unknown service' });
+    if (body.remindDays != null && !(Number.isInteger(body.remindDays) && body.remindDays >= 0 && body.remindDays <= 30)) {
+      throw new HTTPException(400, { message: 'remindDays must be 0..30' });
+    }
     if (body.cancelUrl && !/^https:\/\//.test(body.cancelUrl)) throw new HTTPException(400, { message: 'Cancel URL must be https' });
     const prev = db.listOverrides().find(o => o.key === key);
     const pick = <T,>(v: T | undefined, p: T | null | undefined) => (v === undefined ? p ?? null : v);

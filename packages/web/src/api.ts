@@ -1,4 +1,4 @@
-import type { DetectionStatus, Period } from '@unresub/core';
+import type { Alert, DetectionStatus, Period } from '@unresub/core';
 
 const TOKEN_KEY = 'unresub.apiToken';
 // Empty for the browser build (same origin). The Android build sets it to the server URL.
@@ -58,6 +58,7 @@ export interface SubscriptionItem {
   needsDetails: boolean;
   cancelUrl: string | null;
   notes: string | null;
+  remindDays: number | null;
   category: string | null;
   account: { id: string; maskedPan: string | null; type: string | null; isSubscriptionCard: boolean } | null;
   onMainCard: boolean;
@@ -65,6 +66,7 @@ export interface SubscriptionItem {
 
 export interface SubscriptionsResponse {
   items: SubscriptionItem[];
+  alerts: Alert[];
   totals: { monthlyLocal: number; annualLocal: number; count: number };
   hasSubscriptionCard: boolean;
 }
@@ -101,6 +103,7 @@ export type OverridePatch = Partial<{
   status: 'confirmed' | 'ignored' | null;
   cancelUrl: string | null;
   notes: string | null;
+  remindDays: number | null;
 }>;
 
 export const api = {

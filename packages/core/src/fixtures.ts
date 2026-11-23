@@ -70,7 +70,7 @@ export const demoTransactions = (now = Math.floor(Date.now() / 1000)) => {
     ...makeSeries({ description: 'APPLE.COM/BILL', period: 'monthly', price: 299, currency: usd, rate: 41.4, count: 12, last: now - 3 * day }),
     ...makeSeries({ description: 'APPLE.COM/BILL', period: 'monthly', price: 999, currency: usd, rate: 41.4, count: 6, last: now - 20 * day }),
     ...makeSeries({ description: 'Telegram Premium', period: 'annual', price: 3_599, currency: usd, rate: 41.2, count: 2, last: now - 40 * day }),
-    ...makeSeries({ description: 'DISCORD* NITRO', period: 'monthly', price: 999, currency: usd, rate: 41.3, count: 5, last: now - 25 * day }),
+    ...makeSeries({ description: 'DISCORD* NITRO', period: 'monthly', price: 999, currency: usd, rate: 41.3, count: 5, last: addPeriod(now + 20 * 3_600, 'monthly', -1) }),
     ...makeSeries({ description: 'GOOGLE *YouTubePremium', period: 'monthly', price: 9_900, currency: 980, count: 10, last: now - 7 * day }),
     ...makeSeries({ description: 'MEGOGO.NET', period: 'monthly', price: 19_900, currency: 980, count: 4, last: now - 80 * day, mcc: 4899 }),
     ...makeSeries({ description: 'Hetzner Online 7781234', period: 'monthly', price: 450, currency: 978, rate: 48.1, count: 6, last: now - 9 * day, mcc: 7372 }),

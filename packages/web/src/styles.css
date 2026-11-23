@@ -9,6 +9,7 @@
   --warn: #92400e;
   --soon: #fde68a;
   --error: #b91c1c;
+  --danger-bg: #fee2e2;
   color-scheme: light dark;
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
@@ -24,6 +25,7 @@
     --warn: #fcd34d;
     --soon: #a16207;
     --error: #f87171;
+    --danger-bg: #450a0a;
   }
 }
 * { box-sizing: border-box; }
@@ -68,3 +70,9 @@ code { font-size: 0.8rem; }
   .sub { flex-direction: column; }
   .price { align-items: flex-start; text-align: left; }
 }
+.alerts { margin: 12px 0; gap: 8px; }
+.alert { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border-radius: 12px; background: var(--warn-bg); color: var(--warn); }
+.alert.danger { background: var(--danger-bg); color: var(--error); }
+.alert.subtle { background: var(--card); color: var(--text); border: 1px dashed var(--warn); }
+.badge.danger { background: var(--danger-bg); color: var(--error); }
+.sub.main-card { border-style: dashed; }

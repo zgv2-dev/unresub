@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { addPeriod } from '@unresub/core';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { makeSeries } from '@unresub/core/fixtures';
 import { createApp } from './app.ts';
@@ -102,5 +103,30 @@ describe('server', () => {
 
     body = (await (await app.request('/api/subscriptions', { headers: auth })).json()) as any;
     expect(body.items[0]).toMatchObject({ name: 'Hetzner VPS', needsDetails: false, cancelUrl: 'https://console.hetzner.cloud' });
+  });
+
+  it('reports reminders, low balance on the subs card and subs left on the main card', async () => {
+    const id = seedSource(db);
+    db.upsertAccounts(id, [{ externalId: 'usd', currency: 840, balance: 1_500, creditLimit: 0, maskedPan: '4444****2222', iban: null, type: 'black' }]);
+    db.setSubscriptionCard(`${id}:usd`, true);
+    const now = Math.floor(Date.now() / 1000);
+    const toSrc = (ext: string) => ({ accountId: _, ...t }: ReturnType<typeof makeSeries>[number]) => ({ ...t, accountExternalId: ext, raw: null });
+    // Due tomorrow on the USD subs card, more than its balance.
+    const claude = makeSeries({ description: 'ANTHROPIC', period: 'monthly', price: 2_000, currency: 840, count: 3, last: addPeriod(now + 20 * 3_600, 'monthly', -1) }, `${id}:usd`)
+      .map(t => ({ ...t, accountCurrency: 840, amount: t.operationAmount }));
+    db.insertTransactions(`${id}:usd`, claude.map(toSrc('usd')));
+    // Still billed from the UAH main card.
+    db.insertTransactions(`${id}:acc`, makeSeries({ description: 'NETFLIX.COM', period: 'monthly', price: 999, currency: 840, rate: 41, count: 3, last: now - 10 * 86_400 }).map(toSrc('acc')));
+
+    db.insertRates(now - 40 * 86_400, [{ currency: 840, buy: 40, sell: 40.5 }]);
+    db.insertRates(now - 2 * 86_400, [{ currency: 840, buy: 41, sell: 41.5 }]);
+
+    const body = (await (await app.request('/api/subscriptions', { headers: auth })).json()) as any;
+    // USD charge on the USD card: UAH value from the snapshot closest to the charge (~29 days ago → 40.5).
+    expect(body.items.find((i: any) => i.serviceId === 'anthropic')).toMatchObject({ localPrice: 81_000, rate: 40.5 });
+    const byType = (t: string) => body.alerts.filter((a: any) => a.type === t).map((a: any) => a.name);
+    expect(byType('upcoming_charge')).toEqual(['Anthropic (Claude)']);
+    expect(body.alerts).toContainEqual(expect.objectContaining({ type: 'low_balance', name: 'Anthropic (Claude)', shortfall: 500, currency: 840 }));
+    expect(byType('on_main_card')).toEqual(['Netflix']);
   });
 });

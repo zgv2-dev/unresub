@@ -48,6 +48,16 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 CREATE INDEX IF NOT EXISTS transactions_time ON transactions(time);
 
+-- monobank /bank/currency snapshots, so foreign-card charges get the rate closest to when they happened.
+CREATE TABLE IF NOT EXISTS rate_snapshots (
+  fetched_at INTEGER NOT NULL,
+  currency   INTEGER NOT NULL,
+  rate_buy   REAL,
+  rate_sell  REAL,
+  rate_cross REAL,
+  PRIMARY KEY (fetched_at, currency)
+);
+
 -- User edits on top of detection, keyed by the detection key so re-detection keeps them.
 CREATE TABLE IF NOT EXISTS subscription_overrides (
   key         TEXT PRIMARY KEY,
@@ -132,6 +142,8 @@ export const openDb = (path: string) => {
       ON CONFLICT (id) DO UPDATE SET
         hold = excluded.hold, amount = excluded.amount, operation_amount = excluded.operation_amount, raw = excluded.raw`),
     txns: db.prepare('SELECT * FROM transactions WHERE time >= ? ORDER BY time'),
+    insertRate: db.prepare('INSERT OR REPLACE INTO rate_snapshots (fetched_at, currency, rate_buy, rate_sell, rate_cross) VALUES (?, ?, ?, ?, ?)'),
+    rateNear: db.prepare('SELECT * FROM rate_snapshots WHERE currency = ? ORDER BY ABS(fetched_at - ?) LIMIT 1'),
     overrides: db.prepare('SELECT * FROM subscription_overrides'),
     upsertOverride: db.prepare(`
       INSERT INTO subscription_overrides (key, name, service_id, period, status, cancel_url, notes, remind_days, updated_at)
@@ -196,6 +208,14 @@ export const openDb = (path: string) => {
         counterName: r.counter_name,
         hold: !!r.hold,
       })),
+
+    insertRates: (at: number, rates: { currency: number; buy?: number; sell?: number; cross?: number }[]) => {
+      for (const r of rates) q.insertRate.run(at, r.currency, r.buy ?? null, r.sell ?? null, r.cross ?? null);
+    },
+    rateNear: (currency: number, time: number) =>
+      q.rateNear.get(currency, time) as unknown as
+        | { fetched_at: number; currency: number; rate_buy: number | null; rate_sell: number | null; rate_cross: number | null }
+        | undefined,
 
     listOverrides: () => q.overrides.all() as unknown as OverrideRow[],
     upsertOverride: (o: Omit<OverrideRow, 'updated_at'>) =>

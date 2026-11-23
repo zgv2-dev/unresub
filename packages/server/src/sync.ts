@@ -25,7 +25,7 @@ const nowS = () => Math.floor(Date.now() / 1000);
 
 export class SyncService {
   #status = new Map<string, SyncStatus>();
-  #rates: { at: number; list: MonoRate[] } | null = null;
+  #ratesAt = 0;
 
   constructor(private db: Db, private opts: SyncOptions) {}
 
@@ -99,6 +99,7 @@ export class SyncService {
     const status: SyncStatus = { ...this.status(sourceId), running: true, phase: 'incremental', done: 0, total: 0, lastError: null };
     this.#status.set(sourceId, status);
     const src = adapter ?? this.adapterFor(row);
+    void this.refreshRates();
 
     try {
       if (!adapter) this.db.upsertAccounts(sourceId, await src.listAccounts());
@@ -155,23 +156,48 @@ export class SyncService {
     const balance = (event.transaction.raw as MonoStatementItem | undefined)?.balance;
     if (typeof balance === 'number') this.db.setBalance(account.id, balance);
     this.#log(`${sourceId} webhook: ${event.transaction.description}`);
+    void this.refreshRates();
     return true;
   }
 
   async refreshRates() {
-    if (this.#rates && nowS() - this.#rates.at < 3_600) return;
+    if (nowS() - this.#ratesAt < 3_600) return;
+    this.#ratesAt = nowS();
     try {
-      this.#rates = { at: nowS(), list: await MonobankSource.fetchRates() };
+      const list: MonoRate[] = await MonobankSource.fetchRates();
+      this.db.insertRates(
+        nowS(),
+        list.filter(r => r.currencyCodeB === LOCAL_CURRENCY).map(r => ({ currency: r.currencyCodeA, buy: r.rateBuy, sell: r.rateSell, cross: r.rateCross })),
+      );
     } catch (e) {
       this.#log(`rates fetch failed: ${(e as Error).message}`);
     }
   }
 
-  /** Current-rate conversion, used only when neither side of a transaction is in UAH. */
-  toLocal = (minor: number, currency: CurrencyCode) => {
-    const r = this.#rates?.list.find(x => x.currencyCodeA === currency && x.currencyCodeB === LOCAL_CURRENCY);
-    const rate = r?.rateCross ?? r?.rateSell;
+  #rate(currency: CurrencyCode, side: 'buy' | 'sell', time: number) {
+    const r = this.db.rateNear(currency, time);
+    return (side === 'sell' ? r?.rate_sell : r?.rate_buy) ?? r?.rate_cross ?? null;
+  }
+
+  /**
+   * Used only when neither side of a transaction is in UAH (e.g. a USD charge on the USD card).
+   * Picks the stored monobank rate snapshot closest to the charge time.
+   */
+  toLocal = (minor: number, currency: CurrencyCode, time: number) => {
+    const rate = this.#rate(currency, 'sell', time);
     return rate ? Math.round(toMajor(minor, currency) * rate * 100) : null;
+  };
+
+  /**
+   * Estimates what a charge costs in another currency at today's monobank rates.
+   * Leans pessimistic (bank sells foreign currency to you, buys it back cheaper), which suits balance warnings.
+   */
+  convert = (minor: number, from: CurrencyCode, to: CurrencyCode): number | null => {
+    if (from === to) return minor;
+    const sell = from === LOCAL_CURRENCY ? 1 : this.#rate(from, 'sell', nowS());
+    const buy = to === LOCAL_CURRENCY ? 1 : this.#rate(to, 'buy', nowS());
+    if (!sell || !buy) return null;
+    return Math.round((toMajor(minor, from) * sell) / buy / toMajor(1, to));
   };
 
   startScheduler(hours: number) {

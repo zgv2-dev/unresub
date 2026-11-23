@@ -2,7 +2,7 @@
 
 Personal subscription tracker. Connects to your bank, finds recurring payments, matches them to known services, and shows what's due next.
 
-MVP: monobank only. PUMB and Sense plug in later as `BankSource` adapters (`packages/server/src/sources/`).
+monobank only. Use a monobank USD/EUR card as the dedicated subscriptions card. Sources sit behind a `BankSource` interface (`packages/server/src/sources/`).
 
 ## Layout
 
@@ -71,8 +71,12 @@ Debits are grouped by known service (catalog regexes) or a normalised merchant n
 
 User edits (name, service, period, cancel URL, ignore) are stored as overrides keyed by the detection key and survive re-detection.
 
-## Ready for later
+## Alerts (`packages/core/src/alerts.ts`, returned as `alerts` from `GET /api/subscriptions`)
 
-- `accounts.is_subscription_card` + `onMainCard` in the API: highlight subs still on the main card, low-balance warning before a charge.
-- `subscription_overrides.remind_days` and `nextChargeAt`: day-before reminders.
-- `cancelUrl` per catalog entry: cancel buttons (already shown in the UI).
+- **upcoming_charge**: from `remindDays` (default 1) before the charge until the charge is detected. The UI banner can't be dismissed.
+- **low_balance**: charges due on a subscriptions card in the next 3 days, summed in date order, that the card's own balance (credit limit ignored) won't cover. Charges in another currency are converted at today's monobank rates, rounded against you.
+- **on_main_card**: once any card is marked as the subscriptions card, every live subscription billed from another card.
+
+## Exchange rates
+
+Charges where neither side is UAH (USD charge on the USD card) get their UAH value from the stored `/bank/currency` snapshot closest to the charge time. Snapshots are saved hourly at most, on each sync and webhook, so history before the first run uses the oldest snapshot.
