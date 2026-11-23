@@ -12,6 +12,8 @@ concurrency:
 
 jobs:
   build:
+    permissions:
+      contents: write # create GitHub Releases
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -39,7 +41,7 @@ jobs:
       - name: Build web app and sync into Android project
         working-directory: packages/mobile
         env:
-          # Repo variable: https URL of your UnReSub server, e.g. https://unresub.example.com
+          # Optional repo variable: default server URL baked into the app
           VITE_API_BASE: ${{ vars.UNRESUB_API_URL }}
         run: pnpm sync
 
@@ -70,3 +72,32 @@ jobs:
         with:
           name: unresub-release-${{ env.VERSION_NAME }}
           path: packages/mobile/android/app/build/outputs/apk/release/*.apk
+
+      # Every push to main (or a manual run on main) becomes a GitHub Release v0.1.<run>,
+      # marked Latest: https://github.com/<owner>/<repo>/releases/latest
+      - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ steps.keystore.outputs.path != '' }}
+        run: |
+          out=packages/mobile/android/app/build/outputs/apk
+          mkdir -p dist-apk
+          cp "$out"/debug/*.apk "dist-apk/unresub-$VERSION_NAME-debug.apk"
+          if [ "$SIGNED" = true ]; then
+            cp "$out"/release/*.apk "dist-apk/unresub-$VERSION_NAME.apk"
+            note="**unresub-$VERSION_NAME.apk** is the signed release build. The debug APK is for testing."
+          else
+            cp "$out"/release/*.apk "dist-apk/unresub-$VERSION_NAME-release-unsigned.apk"
+            note="Install **unresub-$VERSION_NAME-debug.apk**. The release APK is unsigned (signing secrets not set) and won't install as is."
+          fi
+          if gh release view "v$VERSION_NAME" >/dev/null 2>&1; then
+            # Re-run of the same build: replace the files.
+            gh release upload "v$VERSION_NAME" dist-apk/*.apk --clobber
+            exit 0
+          fi
+          gh release create "v$VERSION_NAME" dist-apk/*.apk \
+            --target "$GITHUB_SHA" \
+            --title "UnReSub $VERSION_NAME" \
+            --notes "$note"$'\n\n'"Built from $GITHUB_SHA." \
+            --latest

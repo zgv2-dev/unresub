@@ -87,7 +87,7 @@ Then `fly deploy`. Use `https://<app>.fly.dev` as `UNRESUB_API_URL`.
 
 ## Android app
 
-CI (`.github/workflows/android.yml`) builds on every push to `main`, on PRs and on manual runs. APKs are in the run's **Artifacts**: `unresub-debug-*` installs straight away; `unresub-release-*` is signed only if the signing secrets exist.
+CI (`.github/workflows/android.yml`) builds on every push to `main`, on PRs and on manual runs. Each build on `main` is published as a GitHub Release `v0.1.<run>` with the APKs attached; the newest is always at **Releases → Latest** (`/releases/latest`). The debug APK installs straight away; the release APK is signed only if the signing secrets exist (otherwise it's named `-release-unsigned`). PR builds only keep the APKs as run artifacts.
 
 One-time setup in GitHub repo settings:
 
