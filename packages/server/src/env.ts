@@ -13,8 +13,6 @@ export const env = {
   get apiToken() {
     return required('UNRESUB_API_TOKEN');
   },
-  /** Extra origins allowed to call the API, e.g. the Vercel UI: https://unresub.vercel.app */
-  corsOrigins: (process.env.CORS_ORIGINS ?? '').split(',').map(o => o.trim().replace(/\/$/, '')).filter(Boolean),
   publicUrl: process.env.PUBLIC_URL?.replace(/\/$/, '') || null,
   port: Number(process.env.PORT ?? 8787),
   dbPath: process.env.DB_PATH ?? './unresub.db',

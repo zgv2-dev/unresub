@@ -26,7 +26,7 @@ Connect monobank in the UI with a personal token from https://api.monobank.ua.
 
 ## Android app
 
-CI (`.github/workflows/ci.yml`, `android` job) builds on every push to `main`, on PRs and on manual runs. APKs are in the run's **Artifacts**: `unresub-debug-*` installs straight away; `unresub-release-*` is signed only if the signing secrets exist.
+CI (`.github/workflows/android.yml`) builds on every push to `main`, on PRs and on manual runs. APKs are in the run's **Artifacts**: `unresub-debug-*` installs straight away; `unresub-release-*` is signed only if the signing secrets exist.
 
 One-time setup in GitHub repo settings:
 
@@ -39,19 +39,6 @@ One-time setup in GitHub repo settings:
    Add `ANDROID_KEYSTORE_BASE64` (the base64 output), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`unresub`), `ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe: updates must be signed with the same key.
 
 Local build (needs Android SDK + JDK 21): `cd packages/mobile && VITE_API_BASE=https://… pnpm sync && cd android && ./gradlew assembleDebug`.
-
-## Web on Vercel
-
-The `vercel` CI job publishes the web UI to Vercel on every push to `main` (not on PRs). Only the UI goes there: the API server keeps SQLite and a background sync loop, which don't fit serverless, so host it on a small VPS/Fly/Railway and point the UI at it.
-
-One-time setup:
-
-1. Create a project on Vercel (any name; build settings don't matter, CI uploads a prebuilt site).
-2. Repo **secrets**: `VERCEL_TOKEN` (vercel.com → Account settings → Tokens), `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` (project → Settings → General, or `.vercel/project.json` after `vercel link`).
-3. Repo **variable** `UNRESUB_API_URL` (same one the Android build uses).
-4. On the server, set `CORS_ORIGINS=https://<your-project>.vercel.app` so the UI may call the API. The UI still asks for the API token, as before.
-
-The job checks these first and fails with the names of whatever is missing, then runs `vercel whoami` and `vercel project inspect` so a bad token or wrong ids fail before deploying.
 
 ## How sync works
 
