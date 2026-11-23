@@ -341,7 +341,7 @@ describe('server', () => {
       const id = seedSource(db);
       db.upsertAccounts(id, [{ externalId: 'usd', currency: 840, balance: 100_000, creditLimit: 0, maskedPan: '4444****2222', iban: null, type: 'black' }]);
       db.setSubscriptionCard(`${id}:usd`, true);
-      db.insertRates(now - 400 * 86_400, [{ currency: 840, buy: 41, sell: 41.5 }]);
+      core.insertRates(now - 400 * 86_400, [{ currency: 840, buy: 41, sell: 41.5 }]); // rates are shared across users
       return id;
     };
     const put = (id: string, ext: string, series: ReturnType<typeof makeSeries>, usdCard = false) =>
