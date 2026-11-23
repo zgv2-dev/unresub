@@ -1,0 +1,16 @@
+{
+  "name": "@unresub/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --import tsx --watch src/index.ts",
+    "start": "node --env-file-if-exists=../../.env --import tsx src/index.ts",
+    "seed:demo": "node --env-file-if-exists=../../.env --import tsx src/seed-demo.ts",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.11",
+    "@unresub/core": "workspace:*",
+    "hono": "^4.13.21"
+  }
+}
