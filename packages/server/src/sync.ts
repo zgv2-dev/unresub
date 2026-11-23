@@ -9,7 +9,14 @@ export interface SyncOptions {
   publicUrl: string | null;
   backfillMonths: number;
   log?: (msg: string) => void;
+  /** Where exchange rates live; shared across users in multi-user mode. Defaults to this database. */
+  rates?: RateStore;
 }
+
+export type RateStore = Pick<Db, 'insertRates' | 'rateNear'>;
+
+/** Rates are public and monobank limits /bank/currency per IP, so all users share one refresher. */
+const ratesFetchedAt = new WeakMap<RateStore, number>();
 
 export type SyncState = 'idle' | 'fetching' | 'waiting_rate_limit' | 'retrying';
 
@@ -40,20 +47,27 @@ const nowS = () => Math.floor(Date.now() / 1000);
 
 export class SyncService {
   #status = new Map<string, RunState>();
-  #ratesAt = 0;
+  /** One adapter per source, so its per-token rate limiter is shared by sync and webhooks. */
+  #adapters = new Map<string, BankSource>();
+  #rates: RateStore;
 
-  constructor(private db: Db, private opts: SyncOptions) {}
+  constructor(private db: Db, private opts: SyncOptions) {
+    this.#rates = opts.rates ?? db;
+  }
 
   #log(msg: string) {
     (this.opts.log ?? console.log)(`[sync] ${msg}`);
   }
 
   adapterFor(row: SourceRow): BankSource {
+    const cached = this.#adapters.get(row.id);
+    if (cached) return cached;
     const creds = JSON.parse(decryptSecret(row.credentials_enc, this.opts.key, row.id)) as { token: string };
     switch (row.kind) {
       case 'monobank': {
         const src = new MonobankSource(creds.token);
         for (const a of this.db.accountsBySource(row.id)) src.setAccountCurrency(a.external_id, a.currency);
+        this.#adapters.set(row.id, src);
         return src;
       }
       default:
@@ -98,6 +112,7 @@ export class SyncService {
       webhook_secret: randomToken(),
     };
     this.db.insertSource(row);
+    this.#adapters.set(id, src);
     this.db.upsertAccounts(id, info.accounts.map(a => ({
       externalId: a.id, currency: a.currencyCode, balance: a.balance, creditLimit: a.creditLimit,
       maskedPan: a.maskedPan?.[0] ?? null, iban: a.iban ?? null, type: a.type,
@@ -224,17 +239,17 @@ export class SyncService {
     this.db.insertTransactions(account.id, [{ ...event.transaction, accountCurrency: account.currency }]);
     const balance = (event.transaction.raw as MonoStatementItem | undefined)?.balance;
     if (typeof balance === 'number') this.db.setBalance(account.id, balance);
-    this.#log(`${sourceId} webhook: ${event.transaction.description}`);
+    this.#log(`${sourceId} webhook: 1 transaction`);
     void this.refreshRates();
     return true;
   }
 
   async refreshRates() {
-    if (nowS() - this.#ratesAt < 3_600) return;
-    this.#ratesAt = nowS();
+    if (nowS() - (ratesFetchedAt.get(this.#rates) ?? 0) < 3_600) return;
+    ratesFetchedAt.set(this.#rates, nowS());
     try {
       const list: MonoRate[] = await MonobankSource.fetchRates();
-      this.db.insertRates(
+      this.#rates.insertRates(
         nowS(),
         list.filter(r => r.currencyCodeB === LOCAL_CURRENCY).map(r => ({ currency: r.currencyCodeA, buy: r.rateBuy, sell: r.rateSell, cross: r.rateCross })),
       );
@@ -244,7 +259,7 @@ export class SyncService {
   }
 
   #rate(currency: CurrencyCode, side: 'buy' | 'sell', time: number) {
-    const r = this.db.rateNear(currency, time);
+    const r = this.#rates.rateNear(currency, time);
     return (side === 'sell' ? r?.rate_sell : r?.rate_buy) ?? r?.rate_cross ?? null;
   }
 
@@ -268,6 +283,22 @@ export class SyncService {
     if (!sell || !buy) return null;
     return Math.round((toMajor(minor, from) * sell) / buy / toMajor(1, to));
   };
+
+  /** Forget a deleted source's adapter and status. */
+  forget(sourceId: string) {
+    this.#adapters.delete(sourceId);
+    this.#status.delete(sourceId);
+  }
+
+  /** Re-registers webhooks, e.g. after the data moved to a new user database. */
+  async registerWebhooks() {
+    for (const row of this.db.listSources()) {
+      const hook = this.webhookUrl(row);
+      const src = this.adapterFor(row);
+      if (!hook || !src.registerWebhook) continue;
+      await src.registerWebhook(hook).catch(e => this.#log(`${row.id} webhook registration failed: ${(e as Error).message}`));
+    }
+  }
 
   startScheduler(hours: number) {
     const timer = setInterval(() => void this.syncAll(), hours * 3_600_000);

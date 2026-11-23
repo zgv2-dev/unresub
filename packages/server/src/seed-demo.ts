@@ -1,17 +1,24 @@
 /** Fills the database with a fake monobank account and a year of transactions, so the UI works without a token. */
 import { demoTransactions } from '@unresub/core/fixtures';
+import { join } from 'node:path';
+import { openCoreDb } from './core-db.ts';
 import { encryptSecret, randomToken } from './crypto.ts';
-import { openDb } from './db.ts';
-import { env } from './env.ts';
+import { env, loadInstanceKey } from './env.ts';
+import { Tenants } from './tenants.ts';
 
-const db = openDb(env.dbPath);
+// Usage: pnpm seed:demo [username]  (defaults to the first account; create it in the app first)
+const core = openCoreDb(join(env.dataDir, 'core.db'));
+const user = process.argv[2] ? core.userByName(process.argv[2]) : core.listUsers()[0];
+if (!user) throw new Error('No such account. Open the app and finish setup first.');
+const tenants = new Tenants(core, loadInstanceKey(), { dataDir: env.dataDir, publicUrl: null, backfillMonths: env.backfillMonths });
+const { db } = tenants.get(user.id);
 const id = 'demo';
 if (!db.getSource(id)) {
   db.insertSource({
     id,
     kind: 'monobank',
     name: 'monobank · Demo',
-    credentials_enc: encryptSecret(JSON.stringify({ token: 'demo' }), env.secretKey, id),
+    credentials_enc: encryptSecret(JSON.stringify({ token: 'demo' }), tenants.dataKey(user), id),
     webhook_secret: randomToken(),
   });
 }
@@ -22,7 +29,7 @@ db.upsertAccounts(id, [
 db.setSubscriptionCard(`${id}:acc-usd`, true);
 const nowS = Math.floor(Date.now() / 1000);
 for (let m = 12; m >= 0; m--) {
-  db.insertRates(nowS - m * 30 * 86_400, [{ currency: 840, buy: 41 + m * 0.05, sell: 41.4 + m * 0.05 }, { currency: 978, buy: 47.5, sell: 48.3 }]);
+  core.insertRates(nowS - m * 30 * 86_400, [{ currency: 840, buy: 41 + m * 0.05, sell: 41.4 + m * 0.05 }, { currency: 978, buy: 47.5, sell: 48.3 }]);
 }
 // Claude and Discord already moved to the USD subscriptions card; the rest still sit on the main card.
 const onUsd = /claude|discord/i;
@@ -38,5 +45,6 @@ const txns = demoTransactions().map(({ accountId: _, ...t }) => {
 });
 db.insertTransactions(`${id}:acc-main`, txns.filter(t => t.accountExternalId === 'acc-main'));
 db.insertTransactions(`${id}:acc-usd`, txns.filter(t => t.accountExternalId === 'acc-usd'));
-console.log(`Seeded ${txns.length} demo transactions into ${env.dbPath}`);
-db.close();
+console.log(`Seeded ${txns.length} demo transactions for ${user.username}`);
+tenants.closeAll();
+core.close();

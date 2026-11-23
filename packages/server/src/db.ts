@@ -145,6 +145,7 @@ export const openDb = (path: string) => {
     sources: db.prepare('SELECT * FROM sources ORDER BY created_at'),
     source: db.prepare('SELECT * FROM sources WHERE id = ?'),
     deleteSource: db.prepare('DELETE FROM sources WHERE id = ?'),
+    setCredentials: db.prepare('UPDATE sources SET credentials_enc = ? WHERE id = ?'),
     upsertAccount: db.prepare(`
       INSERT INTO accounts (id, source_id, external_id, currency, balance, credit_limit, masked_pan, iban, type, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -194,6 +195,7 @@ export const openDb = (path: string) => {
     listSources: () => q.sources.all() as unknown as SourceRow[],
     getSource: (id: string) => q.source.get(id) as unknown as SourceRow | undefined,
     deleteSource: (id: string) => void q.deleteSource.run(id),
+    setCredentials: (id: string, enc: string) => void q.setCredentials.run(enc, id),
 
     upsertAccounts: (sourceId: string, accounts: SourceAccount[]) => {
       for (const a of accounts) {

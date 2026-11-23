@@ -4,17 +4,31 @@ import { addPeriod } from '@unresub/core';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { makeSeries } from '@unresub/core/fixtures';
 import { createApp } from './app.ts';
-import { decryptSecret, encryptSecret } from './crypto.ts';
+import { Sessions } from './auth.ts';
+import { openCoreDb, type CoreDb } from './core-db.ts';
+import { decryptSecret, encryptSecret, randomToken, sha256 } from './crypto.ts';
 import { openDb, type Db } from './db.ts';
 import { SyncService } from './sync.ts';
+import { Tenants } from './tenants.ts';
 import type { BankSource, SourceTransaction } from './sources/types.ts';
 
 const key = randomBytes(32);
-const API = 'test-api-token';
-const auth = { Authorization: `Bearer ${API}` };
+const auth: Record<string, string> = {};
+let core: CoreDb;
+let tenants: Tenants;
+
+/** A user with a ready bearer session, skipping the (deliberately slow) password hash. */
+const makeUser = (username: string, isAdmin = false) => {
+  const user = tenants.createUser(username, 'scrypt$1$1$1$x$x', isAdmin);
+  const token = randomToken();
+  core.insertSession({ id_hash: sha256(token), user_id: user.id, csrf: 'csrf', user_agent: null, expires_at: Math.floor(Date.now() / 1000) + 3_600 });
+  return { user, headers: { Authorization: `Bearer ${token}` }, ...tenants.get(user.id) };
+};
 
 const seedSource = (db: Db, id = 'mono-1') => {
-  db.insertSource({ id, kind: 'monobank', name: 'test', credentials_enc: encryptSecret('{"token":"t"}', key, id), webhook_secret: 'hook-secret' });
+  const owner = core.listUsers().find(u => tenants.get(u.id).db === db)!;
+  core.addRoute(id, owner.id);
+  db.insertSource({ id, kind: 'monobank', name: 'test', credentials_enc: encryptSecret('{"token":"t"}', tenants.dataKey(owner), id), webhook_secret: 'hook-secret' });
   db.upsertAccounts(id, [{ externalId: 'acc', currency: 980, balance: 10_000, creditLimit: 0, maskedPan: '4444****1111', iban: null, type: 'black' }]);
   return id;
 };
@@ -34,12 +48,15 @@ describe('server', () => {
   let app: ReturnType<typeof createApp>;
 
   beforeEach(() => {
-    db = openDb(':memory:');
-    sync = new SyncService(db, { key, publicUrl: 'https://example.test', backfillMonths: 3, log: () => {} });
-    app = createApp(db, sync, API);
+    core = openCoreDb(':memory:');
+    tenants = new Tenants(core, key, { dataDir: null, publicUrl: 'https://example.test', backfillMonths: 3, log: () => {} });
+    app = createApp({ core, tenants, sessions: new Sessions(core, 30), setupCodes: ['setup-code'], legacy: null, log: () => {} });
+    const me = makeUser('alice', true);
+    ({ db, sync } = me);
+    auth.Authorization = me.headers.Authorization;
   });
 
-  it('rejects API calls without the bearer token', async () => {
+  it('rejects API calls without a session', async () => {
     expect((await app.request('/api/subscriptions')).status).toBe(401);
   });
 
@@ -119,8 +136,8 @@ describe('server', () => {
     // Still billed from the UAH main card.
     db.insertTransactions(`${id}:acc`, makeSeries({ description: 'NETFLIX.COM', period: 'monthly', price: 999, currency: 840, rate: 41, count: 3, last: now - 10 * 86_400 }).map(toSrc('acc')));
 
-    db.insertRates(now - 40 * 86_400, [{ currency: 840, buy: 40, sell: 40.5 }]);
-    db.insertRates(now - 2 * 86_400, [{ currency: 840, buy: 41, sell: 41.5 }]);
+    core.insertRates(now - 40 * 86_400, [{ currency: 840, buy: 40, sell: 40.5 }]);
+    core.insertRates(now - 2 * 86_400, [{ currency: 840, buy: 41, sell: 41.5 }]);
 
     const body = (await (await app.request('/api/subscriptions', { headers: auth })).json()) as any;
     // USD charge on the USD card: UAH value from the snapshot closest to the charge (~29 days ago → 40.5).
