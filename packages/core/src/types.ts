@@ -40,6 +40,8 @@ export type DetectionStatus = 'active' | 'overdue' | 'possibly_cancelled';
 export interface DetectedSubscription {
   /** Stable key, used to attach user overrides across re-detections. */
   key: string;
+  /** Merchant/service + currency group this series came from; `key === groupKey` when it wasn't split by price. */
+  groupKey: string;
   serviceId: string | null;
   name: string;
   period: Period;

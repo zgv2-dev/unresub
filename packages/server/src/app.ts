@@ -4,6 +4,7 @@ import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import {
   annualEquivalent,
+  applyCorrections,
   computeAlerts,
   detectSubscriptions,
   monthlyEquivalent,
@@ -22,13 +23,20 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
   const accounts = new Map(db.listAccounts().map(a => [a.id, a]));
   const hasSubCard = [...accounts.values()].some(a => a.is_subscription_card);
   const overrides = new Map(db.listOverrides().map(o => [o.key, o]));
-  const detected = detectSubscriptions(db.listTransactions(), { now, toLocal: sync.toLocal });
+  const splitGroups = db.splitGroups();
+  const raw = detectSubscriptions(db.listTransactions(), { now, toLocal: sync.toLocal, splitGroups });
+  const nameOf = new Map(raw.map(r => [r.key, overrides.get(r.key)?.name ?? serviceById(r.serviceId)?.name ?? r.name]));
+  const detected = applyCorrections(
+    raw,
+    new Map([...overrides].map(([k, o]) => [k, { period: o.period, mergedInto: o.merged_into }])),
+    now,
+  );
 
   const items = detected.map(d => {
     const o: Partial<OverrideRow> = overrides.get(d.key) ?? {};
     const serviceId = o.service_id ?? d.serviceId;
     const service = serviceById(serviceId);
-    const period = o.period ?? d.period;
+    const period = d.period;
     const account = accounts.get(d.accountId);
     return {
       ...d,
@@ -45,6 +53,14 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
       notes: o.notes ?? null,
       remindDays: o.remind_days ?? null,
       userStatus: o.status ?? null,
+      /** The detected period was overridden by the user. */
+      periodCorrected: !!o.period,
+      /** Series folded into this one; PATCH their key with mergedInto: null to undo. */
+      merged: d.mergedKeys.map(k => ({ key: k, name: nameOf.get(k) ?? k })),
+      /** This merchant could be split into separate subscriptions by price. */
+      canSplit: d.key === d.groupKey,
+      /** This row came from a split; "undo split" goes through groupKey. */
+      isSplit: splitGroups.has(d.groupKey),
       needsDetails: !serviceId && !o.name,
       account: account
         ? { id: account.id, maskedPan: account.masked_pan, type: account.type, isSubscriptionCard: !!account.is_subscription_card }
@@ -205,7 +221,8 @@ export const createApp = (db: Db, sync: SyncService, apiToken: string) => {
 
   api.patch('/subscriptions/:key', async c => {
     const key = c.req.param('key');
-    const body = await c.req.json<Partial<{ name: string | null; serviceId: string | null; period: Period | null; status: 'confirmed' | 'ignored' | null; cancelUrl: string | null; notes: string | null; remindDays: number | null }>>();
+    const body = await c.req.json<Partial<{ name: string | null; serviceId: string | null; period: Period | null; status: 'confirmed' | 'ignored' | null; cancelUrl: string | null; notes: string | null; remindDays: number | null; mergedInto: string | null }>>();
+    if (body.mergedInto === key) throw new HTTPException(400, { message: "Can't merge a subscription into itself" });
     if (body.period && !PERIODS.includes(body.period)) throw new HTTPException(400, { message: 'Bad period' });
     if (body.serviceId && !serviceById(body.serviceId)) throw new HTTPException(400, { message: 'Unknown service' });
     if (body.remindDays != null && !(Number.isInteger(body.remindDays) && body.remindDays >= 0 && body.remindDays <= 30)) {
@@ -223,9 +240,14 @@ export const createApp = (db: Db, sync: SyncService, apiToken: string) => {
       cancel_url: pick(body.cancelUrl, prev?.cancel_url),
       notes: pick(body.notes, prev?.notes),
       remind_days: pick(body.remindDays, prev?.remind_days),
+      merged_into: pick(body.mergedInto, prev?.merged_into),
     });
     return c.body(null, 204);
   });
+
+  // Split a merchant into separate subscriptions by price, or undo it. Keyed by the group, so new charges follow.
+  api.put('/split-groups/:groupKey', c => (db.setSplit(c.req.param('groupKey'), true), c.body(null, 204)));
+  api.delete('/split-groups/:groupKey', c => (db.setSplit(c.req.param('groupKey'), false), c.body(null, 204)));
 
   app.route('/api', api);
   return app;

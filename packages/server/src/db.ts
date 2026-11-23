@@ -58,6 +58,12 @@ CREATE TABLE IF NOT EXISTS rate_snapshots (
   PRIMARY KEY (fetched_at, currency)
 );
 
+-- Merchant groups the user split into separate subscriptions by price.
+CREATE TABLE IF NOT EXISTS split_groups (
+  group_key  TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL
+);
+
 -- User edits on top of detection, keyed by the detection key so re-detection keeps them.
 CREATE TABLE IF NOT EXISTS subscription_overrides (
   key         TEXT PRIMARY KEY,
@@ -68,6 +74,7 @@ CREATE TABLE IF NOT EXISTS subscription_overrides (
   cancel_url  TEXT,
   notes       TEXT,
   remind_days INTEGER,          -- reminder lead time, for later notifications
+  merged_into TEXT,             -- fold this series into another key
   updated_at  INTEGER NOT NULL
 );
 `;
@@ -106,6 +113,7 @@ export interface OverrideRow {
   cancel_url: string | null;
   notes: string | null;
   remind_days: number | null;
+  merged_into: string | null;
   updated_at: number;
 }
 
@@ -114,6 +122,9 @@ const now = () => Math.floor(Date.now() / 1000);
 export const openDb = (path: string) => {
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
+  // Migrations for databases created before a column existed.
+  const cols = (table: string) => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name));
+  if (!cols('subscription_overrides').has('merged_into')) db.exec('ALTER TABLE subscription_overrides ADD COLUMN merged_into TEXT');
 
   const q = {
     insertSource: db.prepare(
@@ -146,11 +157,14 @@ export const openDb = (path: string) => {
     rateNear: db.prepare('SELECT * FROM rate_snapshots WHERE currency = ? ORDER BY ABS(fetched_at - ?) LIMIT 1'),
     overrides: db.prepare('SELECT * FROM subscription_overrides'),
     upsertOverride: db.prepare(`
-      INSERT INTO subscription_overrides (key, name, service_id, period, status, cancel_url, notes, remind_days, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO subscription_overrides (key, name, service_id, period, status, cancel_url, notes, remind_days, merged_into, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (key) DO UPDATE SET
         name = excluded.name, service_id = excluded.service_id, period = excluded.period, status = excluded.status,
-        cancel_url = excluded.cancel_url, notes = excluded.notes, remind_days = excluded.remind_days, updated_at = excluded.updated_at`),
+        cancel_url = excluded.cancel_url, notes = excluded.notes, remind_days = excluded.remind_days, merged_into = excluded.merged_into, updated_at = excluded.updated_at`),
+    splitGroups: db.prepare('SELECT group_key FROM split_groups'),
+    addSplit: db.prepare('INSERT OR IGNORE INTO split_groups (group_key, created_at) VALUES (?, ?)'),
+    removeSplit: db.prepare('DELETE FROM split_groups WHERE group_key = ?'),
   };
 
   return {
@@ -219,7 +233,9 @@ export const openDb = (path: string) => {
 
     listOverrides: () => q.overrides.all() as unknown as OverrideRow[],
     upsertOverride: (o: Omit<OverrideRow, 'updated_at'>) =>
-      void q.upsertOverride.run(o.key, o.name, o.service_id, o.period, o.status, o.cancel_url, o.notes, o.remind_days, now()),
+      void q.upsertOverride.run(o.key, o.name, o.service_id, o.period, o.status, o.cancel_url, o.notes, o.remind_days, o.merged_into, now()),
+    splitGroups: () => new Set((q.splitGroups.all() as { group_key: string }[]).map(r => r.group_key)),
+    setSplit: (groupKey: string, split: boolean) => void (split ? q.addSplit.run(groupKey, now()) : q.removeSplit.run(groupKey)),
   };
 };
 

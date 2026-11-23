@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { addPeriod } from '@unresub/core';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { makeSeries } from '@unresub/core/fixtures';
@@ -188,5 +189,78 @@ describe('server', () => {
       await new Promise(r => setTimeout(r, 0));
     }
     await run;
+  });
+
+  describe('corrections', () => {
+    const subsOf = async () => ((await (await app.request('/api/subscriptions', { headers: auth })).json()) as any);
+    const patch = (key: string, body: object) =>
+      app.request(`/api/subscriptions/${encodeURIComponent(key)}`, { method: 'PATCH', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const insert = (id: string, series: ReturnType<typeof makeSeries>) =>
+      db.insertTransactions(`${id}:acc`, series.map(({ accountId: _, ...t }) => ({ ...t, accountExternalId: 'acc', raw: null })));
+    const now = Math.floor(Date.now() / 1000);
+
+    it('keeps a hidden subscription hidden when new charges arrive', async () => {
+      const id = seedSource(db);
+      insert(id, makeSeries({ description: 'Gym Sport Life', period: 'monthly', price: 90_000, currency: 980, count: 3, last: addPeriod(now - 3 * 86_400, 'monthly', -1) }));
+      const [gym] = (await subsOf()).items;
+      expect((await patch(gym.key, { status: 'ignored' })).status).toBe(204);
+      insert(id, makeSeries({ description: 'Gym Sport Life', period: 'monthly', price: 90_000, currency: 980, count: 1, last: now - 3 * 86_400 }));
+      const body = await subsOf();
+      expect(body.items).toMatchObject([{ key: gym.key, userStatus: 'ignored', chargeCount: 4 }]);
+      expect(body.totals.count).toBe(0);
+      expect(body.alerts).toEqual([]);
+    });
+
+    it('merges and unmerges two series', async () => {
+      const id = seedSource(db);
+      insert(id, makeSeries({ description: 'SERVICE OLD NAME', period: 'monthly', price: 500, currency: 840, rate: 41, count: 3, last: now - 70 * 86_400 }));
+      insert(id, makeSeries({ description: 'SERVICE NEW', period: 'monthly', price: 600, currency: 840, rate: 41, count: 2, last: now - 10 * 86_400 }));
+      const items = (await subsOf()).items as any[];
+      expect(items).toHaveLength(2);
+      const oldOne = items.find(i => i.price === 500);
+      const newOne = items.find(i => i.price === 600);
+      expect((await patch(oldOne.key, { mergedInto: oldOne.key })).status).toBe(400);
+      await patch(oldOne.key, { mergedInto: newOne.key });
+      let body = await subsOf();
+      expect(body.items).toMatchObject([{ key: newOne.key, chargeCount: 5, merged: [{ key: oldOne.key }] }]);
+      await patch(oldOne.key, { mergedInto: null });
+      body = await subsOf();
+      expect(body.items).toHaveLength(2);
+    });
+
+    it('splits a merchant by price and undoes it', async () => {
+      const id = seedSource(db);
+      insert(id, makeSeries({ description: 'PADDLE.NET', period: 'monthly', price: 500, currency: 840, rate: 41, count: 3, last: now - 5 * 86_400 }));
+      insert(id, makeSeries({ description: 'PADDLE.NET', period: 'monthly', price: 550, currency: 840, rate: 41, count: 3, last: now - 5 * 86_400 }));
+      let items = (await subsOf()).items as any[];
+      expect(items).toMatchObject([{ canSplit: true, isSplit: false }]);
+      const put = await app.request(`/api/split-groups/${encodeURIComponent(items[0].groupKey)}`, { method: 'PUT', headers: auth });
+      expect(put.status).toBe(204);
+      items = (await subsOf()).items;
+      expect(items.map(i => i.price).sort()).toEqual([500, 550]);
+      expect(items.every(i => i.isSplit && !i.canSplit)).toBe(true);
+      await app.request(`/api/split-groups/${encodeURIComponent(items[0].groupKey)}`, { method: 'DELETE', headers: auth });
+      expect((await subsOf()).items).toHaveLength(1);
+    });
+
+    it('corrects the period and recomputes the next charge', async () => {
+      const id = seedSource(db);
+      insert(id, makeSeries({ description: 'ANTHROPIC', period: 'monthly', price: 2_000, currency: 840, rate: 41, count: 3, last: now - 5 * 86_400 }));
+      const [s] = (await subsOf()).items;
+      await patch(s.key, { period: 'annual' });
+      const [after] = (await subsOf()).items;
+      expect(after).toMatchObject({ period: 'annual', periodCorrected: true, nextChargeAt: addPeriod(s.lastChargeAt, 'annual'), annual: 2_000 });
+    });
+
+    it('migrates an old database without the merged_into column', () => {
+      const path = `${process.env.TMPDIR ?? '/tmp'}/unresub-migrate-${Date.now()}.db`;
+      const old = new DatabaseSync(path);
+      old.exec('CREATE TABLE subscription_overrides (key TEXT PRIMARY KEY, name TEXT, service_id TEXT, period TEXT, status TEXT, cancel_url TEXT, notes TEXT, remind_days INTEGER, updated_at INTEGER NOT NULL)');
+      old.exec("INSERT INTO subscription_overrides (key, status, updated_at) VALUES ('k', 'ignored', 1)");
+      old.close();
+      const migrated = openDb(path);
+      expect(migrated.listOverrides()).toMatchObject([{ key: 'k', status: 'ignored', merged_into: null }]);
+      migrated.close();
+    });
   });
 });

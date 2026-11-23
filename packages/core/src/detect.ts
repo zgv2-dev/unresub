@@ -17,6 +17,8 @@ export interface DetectOptions {
   minConfidence?: number;
   /** Converts a foreign-currency amount to local minor units at (or near) `time`, for accounts not in UAH. */
   toLocal?: (minor: number, currency: CurrencyCode, time: number) => number | null;
+  /** Group keys the user asked to split by price (one merchant, several subscriptions). */
+  splitGroups?: ReadonlySet<string>;
 }
 
 const DAY = 86_400;
@@ -93,14 +95,14 @@ const evaluate = (series: Transaction[], requireMinWeekly: boolean): SeriesEval 
   return { period, regularity: reg, stability };
 };
 
-const statusFor = (next: number, period: Period, now: number): DetectionStatus => {
+export const statusFor = (next: number, period: Period, now: number): DetectionStatus => {
   if (now <= next + GRACE_DAYS[period] * DAY) return 'active';
   if (now <= next + PERIOD_DAYS[period] * DAY) return 'overdue';
   return 'possibly_cancelled';
 };
 
 export const detectSubscriptions = (transactions: Transaction[], opts: DetectOptions = {}) => {
-  const { now = Math.floor(Date.now() / 1000), catalog = SERVICE_CATALOG, minConfidence = 0.45, toLocal } = opts;
+  const { now = Math.floor(Date.now() / 1000), catalog = SERVICE_CATALOG, minConfidence = 0.45, toLocal, splitGroups } = opts;
 
   const debits = transactions.filter(t => t.operationAmount < 0).toSorted((a, b) => a.time - b.time);
 
@@ -119,9 +121,14 @@ export const detectSubscriptions = (transactions: Transaction[], opts: DetectOpt
 
   for (const [groupKey, { service, txns }] of groups) {
     const candidates: { key: string; series: Transaction[] }[] = [];
-    const whole = !service?.aggregator ? evaluate(txns, !service) : null;
+    const split = splitGroups?.has(groupKey) ?? false;
+    const whole = !service?.aggregator && !split ? evaluate(txns, !service) : null;
     if (whole) {
       candidates.push({ key: groupKey, series: txns });
+    } else if (split) {
+      for (const c of clusterByAmount(txns, 0.02)) {
+        candidates.push({ key: `${groupKey}|${Math.abs(c[0]!.operationAmount)}`, series: c });
+      }
     } else if (service?.aggregator || txns.length >= 4) {
       // Aggregators (Apple, Google Play) bill several subscriptions; unknown merchants only count
       // when the exact same amount repeats at least 3 times, so groceries don't look recurring.
@@ -156,6 +163,7 @@ export const detectSubscriptions = (transactions: Transaction[], opts: DetectOpt
 
       results.push({
         key,
+        groupKey,
         serviceId: service?.id ?? null,
         name: service?.name ?? last.counterName ?? (last.description.replace(/\s*[#№]?\d{3,}\S*/g, '').trim() || last.description),
         period: ev.period,
