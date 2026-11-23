@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
+import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import {
   annualEquivalent,
@@ -95,6 +96,8 @@ export const createApp = (db: Db, sync: SyncService, apiToken: string) => {
   });
 
   // --- API (bearer token) ---
+  // The Android app (Capacitor WebView) calls the API from https://localhost.
+  app.use('/api/*', cors({ origin: ['https://localhost', 'capacitor://localhost'], allowHeaders: ['Authorization', 'Content-Type'] }));
   const api = new Hono();
   api.use('*', bearerAuth({ verifyToken: token => safeEqual(token, apiToken) }));
 

@@ -1,0 +1,17 @@
+{
+  "name": "@unresub/mobile",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:web": "pnpm --filter @unresub/web build",
+    "sync": "pnpm build:web && cap sync android",
+    "open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/core": "^8.6.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.2"
+  }
+}

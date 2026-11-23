@@ -1,6 +1,8 @@
 import type { DetectionStatus, Period } from '@unresub/core';
 
 const TOKEN_KEY = 'unresub.apiToken';
+// Empty for the browser build (same origin). The Android build sets it to the server URL.
+const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
 
 export const getApiToken = () => {
   try {
@@ -22,7 +24,7 @@ export class ApiError extends Error {
 }
 
 const call = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${API_BASE}/api${path}`, {
     ...init,
     headers: { Authorization: `Bearer ${getApiToken() ?? ''}`, 'Content-Type': 'application/json', ...init.headers },
   });

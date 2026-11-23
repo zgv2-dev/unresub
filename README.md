@@ -9,6 +9,7 @@ MVP: monobank only. PUMB and Sense plug in later as `BankSource` adapters (`pack
 - `packages/core`: bank-agnostic logic. Recurring-payment detection (`detect.ts`), known-service catalog (`catalog.ts`), money/period math (`money.ts`).
 - `packages/server`: Hono API + SQLite (`node:sqlite`, no native deps). monobank adapter, sync scheduler, webhook endpoint, encrypted token storage.
 - `packages/web`: React + Vite UI.
+- `packages/mobile`: Android app. Capacitor wraps the web UI; native pieces (reminder notifications, bank notification parsing) go into `android/`.
 
 ## Run
 
@@ -22,6 +23,22 @@ pnpm dev               # API on :8787, UI on :5173
 Production: `pnpm --filter @unresub/web build && pnpm --filter @unresub/server start` (the server serves the built UI).
 
 Connect monobank in the UI with a personal token from https://api.monobank.ua.
+
+## Android app
+
+CI (`.github/workflows/android.yml`) builds on every push to `main`, on PRs and on manual runs. APKs are in the run's **Artifacts**: `unresub-debug-*` installs straight away; `unresub-release-*` is signed only if the signing secrets exist.
+
+One-time setup in GitHub repo settings:
+
+1. **Variable** `UNRESUB_API_URL` (Settings → Secrets and variables → Actions → Variables): https URL of your server, e.g. `https://unresub.example.com`. Android blocks plain http. The server already allows CORS from the app.
+2. **Secrets** for a signed release (optional; debug builds work without them):
+   ```sh
+   keytool -genkeypair -v -keystore unresub.jks -alias unresub -keyalg RSA -keysize 4096 -validity 10000
+   base64 -w0 unresub.jks   # macOS: base64 -i unresub.jks
+   ```
+   Add `ANDROID_KEYSTORE_BASE64` (the base64 output), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`unresub`), `ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe: updates must be signed with the same key.
+
+Local build (needs Android SDK + JDK 21): `cd packages/mobile && VITE_API_BASE=https://… pnpm sync && cd android && ./gradlew assembleDebug`.
 
 ## How sync works
 
