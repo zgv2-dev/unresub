@@ -54,6 +54,9 @@ One-time setup:
    - `UNRESUB_SECRET_KEY`, `UNRESUB_API_TOKEN`: from step 1
    - `PORT` = `8787`
    - optional: `SYNC_INTERVAL_HOURS` (default 6), `BACKFILL_MONTHS` (default 12)
+   - `DB_PATH`: don't set it, or set it to `/data/unresub.db`. Anything else (like `./unresub.db`) puts the database outside the volume and it's wiped on every deploy.
+
+   Railway may suggest variables from `.env.example`; accept the two secrets and skip the rest.
 5. **Get a public address.** Service → **Settings** → **Networking** → **Generate Domain**, target port `8787`. You get something like `https://unresub-production.up.railway.app`.
 6. **Turn on webhooks.** Add the variable `PUBLIC_URL` = that https address. Railway redeploys. The deploy is healthy when **Deployments** shows it as active; `https://<your address>/healthz` answers `ok`.
 7. **Use it.** Open the address, enter `UNRESUB_API_TOKEN`, then connect monobank with a token from https://api.monobank.ua.
