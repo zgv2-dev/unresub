@@ -590,3 +590,17 @@ code { font: 12.5px ui-monospace, 'SF Mono', Menlo, monospace; background: var(-
 .fix-btns { flex-wrap: nowrap; }
 .fix-btns .select-trigger { width: 200px; max-width: 100%; height: 36px; font-size: 14px; }
 .sheet-actions .btn { padding: 0 10px; gap: 6px; font-size: 14px; white-space: nowrap; }
+
+/* Subscription charge history */
+.history { display: flex; flex-direction: column; gap: 10px; margin-top: 22px; }
+.history-total { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.history-total > div { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: 14px; background: var(--surface-2); }
+.history-total span { font-size: 12.5px; color: var(--text-3); }
+.history-total strong { font-size: 16px; }
+.history-total em { font-style: normal; font-size: 12.5px; color: var(--text-2); }
+.history-row { display: flex; align-items: center; gap: 10px; padding: 10px 6px 10px 12px; }
+.history-row .row-title { display: flex; gap: 6px; align-items: center; font-size: 14.5px; }
+.history-actions { display: flex; flex: none; }
+.history-actions .icon-btn { width: 32px; height: 32px; }
+.history-list li + li .history-row { border-top: 1px solid var(--line); }
+.history-undo { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 8px 12px; border-radius: 12px; background: var(--accent-soft); }

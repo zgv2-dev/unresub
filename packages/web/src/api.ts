@@ -192,6 +192,35 @@ export interface TransactionRow {
   subscriptionKey: string | null;
   subscriptionName: string | null;
   hidden: boolean;
+  /** Unlinked from a subscription by the user */
+  excluded?: boolean;
+}
+
+export interface HistoryRow {
+  id: string;
+  time: number;
+  description: string;
+  /** Merchant currency, positive minor units */
+  price: number;
+  currency: number;
+  /** UAH at this charge's own rate */
+  local: number | null;
+  rate: number | null;
+  hold: boolean;
+  card: { id: string; maskedPan: string | null; currency: number } | null;
+  /** Set on the first charge after the subscription moved cards */
+  movedFrom: { id: string; maskedPan: string | null } | null;
+  priceChange: { from: number; delta: number; pct: number } | null;
+  currencyChanged: boolean;
+}
+
+export interface HistoryResponse {
+  key: string;
+  count: number;
+  totalLocal: number;
+  totalByCurrency: Record<string, number>;
+  since: number | null;
+  items: HistoryRow[];
 }
 
 export interface TransactionFilters {
@@ -301,6 +330,10 @@ export const api = {
     );
     return call<{ total: number; items: TransactionRow[] }>(`/transactions?${qs}`);
   },
+  history: (key: string) => call<HistoryResponse>(`/subscriptions/${encodeURIComponent(key)}/transactions`),
+  unlink: (key: string, transactionId: string) =>
+    call<void>(`/subscriptions/${encodeURIComponent(key)}/unlink`, { method: 'POST', body: JSON.stringify({ transactionId }) }),
+  relink: (transactionId: string) => call<void>(`/excluded-transactions/${encodeURIComponent(transactionId)}`, { method: 'DELETE' }),
   similar: (id: string) => call<SimilarResponse>(`/transactions/${encodeURIComponent(id)}/similar`),
   createManual: (body: { transactionId: string; name: string; serviceId: string | null; period: Period; matchAmount: boolean; attachIds: string[] }) =>
     call<{ key: string }>('/manual-subscriptions', { method: 'POST', body: JSON.stringify(body) }),

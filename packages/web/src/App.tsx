@@ -240,6 +240,8 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
           onClose={() => setOpenKey(null)}
           onSaved={() => (setOpenKey(null), void load())}
           onHide={() => void hide(open)}
+          onRefresh={() => (setTxVersion(v => v + 1), void load())}
+          onOpenTransaction={id => void api.similar(id).then(r => (setOpenKey(null), setTab('tx'), setTxn(r.transaction)), e => setError((e as Error).message))}
         />
       )}
 

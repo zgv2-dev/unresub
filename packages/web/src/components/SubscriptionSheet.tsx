@@ -5,6 +5,7 @@ import { fmtDate, PERIOD_LABEL, PERIOD_OPTIONS, PERIOD_SHORT, relative } from '.
 import { Icon } from './Icon.tsx';
 import { ServiceIcon } from './ServiceIcon.tsx';
 import { Sheet } from './Sheet.tsx';
+import { SubscriptionHistory } from './SubscriptionHistory.tsx';
 import { Select } from './Select.tsx';
 import { Stepper } from './Stepper.tsx';
 
@@ -17,9 +18,13 @@ type Props = {
   onSaved: () => void;
   /** Hides with an undo toast (handled by the parent). */
   onHide: () => void;
+  /** Jump to one of its charges in the Transactions tab. */
+  onOpenTransaction?: (transactionId: string) => void;
+  /** A charge was unlinked or relinked: refresh lists without closing the sheet. */
+  onRefresh?: () => void;
 };
 
-export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide }: Props) => {
+export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide, onOpenTransaction, onRefresh }: Props) => {
   const formId = useId();
   const [name, setName] = useState(s.needsDetails ? '' : s.name);
   const [serviceId, setServiceId] = useState(s.serviceId ?? '');
@@ -142,6 +147,8 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
           </button>
         )}
       </div>
+
+      <SubscriptionHistory subscriptionKey={s.key} onOpenTransaction={onOpenTransaction} onChanged={onRefresh} />
 
       <form id={formId} className="stack" onSubmit={e => (e.preventDefault(), void save())}>
         <div className="divider-title">Details</div>
