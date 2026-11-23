@@ -11,6 +11,7 @@ import { openDb } from './db.ts';
 import { env, loadInstanceKey } from './env.ts';
 import { SyncService } from './sync.ts';
 import { Tenants } from './tenants.ts';
+import { WebAuthn } from './webauthn.ts';
 
 const key = loadInstanceKey();
 const core = openCoreDb(join(env.dataDir, 'core.db'));
@@ -38,7 +39,15 @@ if (core.userCount() === 0) {
   ].join('\n'));
 }
 
-const app = createApp({ core, tenants, sessions: new Sessions(core, env.sessionDays), setupCodes, legacy });
+const app = createApp({
+  core,
+  tenants,
+  sessions: new Sessions(core, env.sessionDays),
+  setupCodes,
+  legacy,
+  webauthn: new WebAuthn({ publicUrl: env.publicUrl, androidCertFingerprints: env.androidCertFingerprints }),
+  android: { package: env.androidPackage, fingerprints: env.androidCertFingerprints },
+});
 
 // Serve the built web UI in production.
 const webDist = fileURLToPath(new URL('../../web/dist', import.meta.url));

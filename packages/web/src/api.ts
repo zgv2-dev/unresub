@@ -1,13 +1,12 @@
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import { browserSupportsWebAuthn, startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import type { Alert, DetectionStatus, Period } from '@unresub/core';
 
 const SERVER_KEY = 'unresub.server';
 const TOKEN_KEY = 'unresub.session';
 
 /** True inside the Android app (Capacitor WebView), where the server is remote and chosen at sign-in. */
-export const isNative = (() => {
-  const cap = (globalThis as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor;
-  return !!(cap?.isNativePlatform?.() ?? (cap?.getPlatform && cap.getPlatform() !== 'web'));
-})();
+export const isNative = Capacitor.isNativePlatform();
 
 const store = {
   get: (k: string) => {
@@ -71,6 +70,7 @@ export interface User {
   username: string;
   isAdmin: boolean;
   createdAt: number;
+  passkeys?: number;
 }
 
 export interface AuthStatus {
@@ -78,20 +78,70 @@ export interface AuthStatus {
   legacyData: boolean;
   signup: 'invite' | 'open';
   user: User | null;
+  /** Signed in, but must add a passkey before anything else (recovery, re-enrol link, old password account). */
+  mustEnrol: boolean;
   csrfToken: string | null;
 }
 
-interface SignedIn {
+export interface SignedIn {
   user: User;
+  mustEnrol: boolean;
   csrfToken: string | null;
   token?: string;
+  /** Shown once, right after the account (or its first passkey) is created. */
+  recoveryCodes?: string[] | null;
 }
+
+export interface Passkey {
+  id: string;
+  name: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+  synced: boolean;
+}
+
+type Options = { flowId: string; options: Record<string, any> };
+
+// The browser uses WebAuthn directly. The Android app can't (its WebView origin is https://localhost),
+// so it goes through the native Credential Manager plugin (MainActivity's PasskeyPlugin).
+const NativePasskey = registerPlugin<{
+  create(o: { requestJson: string }): Promise<{ responseJson: string }>;
+  get(o: { requestJson: string }): Promise<{ responseJson: string }>;
+}>('Passkey');
+
+const passkeyError = (e: unknown) => {
+  const name = (e as { name?: string })?.name;
+  const msg = (e as Error)?.message ?? String(e);
+  if (name === 'NotAllowedError' || /cancel/i.test(msg)) return new Error('Passkey request cancelled.');
+  if (name === 'InvalidStateError') return new Error('This device already has a passkey for this account.');
+  return new Error(msg || 'Passkey failed');
+};
+
+const createPasskey = async (options: Record<string, any>) => {
+  try {
+    if (isNative) return JSON.parse((await NativePasskey.create({ requestJson: JSON.stringify(options) })).responseJson);
+    return await startRegistration({ optionsJSON: options as any });
+  } catch (e) {
+    throw passkeyError(e);
+  }
+};
+
+const usePasskey = async (options: Record<string, any>) => {
+  try {
+    if (isNative) return JSON.parse((await NativePasskey.get({ requestJson: JSON.stringify(options) })).responseJson);
+    return await startAuthentication({ optionsJSON: options as any });
+  } catch (e) {
+    throw passkeyError(e);
+  }
+};
+
+export const passkeysSupported = () => isNative || browserSupportsWebAuthn();
 
 const client = isNative ? 'app' : 'web';
 const signedIn = (r: SignedIn) => {
   csrfToken = r.csrfToken;
   if (r.token) setToken(r.token);
-  return r.user;
+  return r;
 };
 
 export const auth = {
@@ -100,9 +150,21 @@ export const auth = {
     csrfToken = s.csrfToken;
     return s;
   },
-  setup: (b: { username: string; password: string; setupCode: string }) => send<SignedIn>('POST', '/auth/setup', { ...b, client }).then(signedIn),
-  login: (b: { username: string; password: string }) => send<SignedIn>('POST', '/auth/login', { ...b, client }).then(signedIn),
-  signup: (b: { username: string; password: string; invite?: string }) => send<SignedIn>('POST', '/auth/signup', { ...b, client }).then(signedIn),
+  /** Setup (first admin, with the setup code) or sign-up (open, or with an invite). */
+  register: async (b: { username: string; setupCode?: string; invite?: string }) => {
+    const { flowId, options } = await send<Options>('POST', '/auth/register/options', b);
+    const response = await createPasskey(options);
+    return signedIn(await send<SignedIn>('POST', '/auth/register/verify', { flowId, response, client }));
+  },
+  signIn: async () => {
+    const { flowId, options } = await send<Options>('POST', '/auth/login/options', {});
+    const response = await usePasskey(options);
+    return signedIn(await send<SignedIn>('POST', '/auth/login/verify', { flowId, response, client }));
+  },
+  recover: (username: string, code: string) => send<SignedIn>('POST', '/auth/recover', { username, code, client }).then(signedIn),
+  reenrol: (token: string) => send<SignedIn>('POST', '/auth/reenrol', { token, client }).then(signedIn),
+  /** Accounts made before passkeys: one last password sign-in, only to add a passkey. */
+  passwordOnce: (username: string, password: string) => send<SignedIn>('POST', '/auth/login', { username, password, client }).then(signedIn),
   logout: async () => {
     await send<void>('POST', '/auth/logout').catch(() => {});
     csrfToken = null;
@@ -110,8 +172,22 @@ export const auth = {
   },
   /** Forget a session the server no longer accepts. */
   forget: () => ((csrfToken = null), setToken(null)),
-  changePassword: (current: string, next: string) => send<void>('POST', '/me/password', { current, next }),
-  deleteAccount: (password: string) => send<void>('DELETE', '/me', { password }).then(() => setToken(null)),
+  me: () => call<User & { recoveryCodesLeft: number }>('/me'),
+  passkeys: () => call<Passkey[]>('/me/passkeys'),
+  addPasskey: async (name?: string) => {
+    const { flowId, options } = await send<Options>('POST', '/me/passkeys/options', {});
+    const response = await createPasskey(options);
+    return send<{ recoveryCodes: string[] | null }>('POST', '/me/passkeys/verify', { flowId, response, name });
+  },
+  renamePasskey: (id: string, name: string) => send<void>('PATCH', `/me/passkeys/${encodeURIComponent(id)}`, { name }),
+  removePasskey: (id: string) => send<void>('DELETE', `/me/passkeys/${encodeURIComponent(id)}`),
+  newRecoveryCodes: () => send<{ recoveryCodes: string[] }>('POST', '/me/recovery-codes', {}),
+  deleteAccount: async () => {
+    const { flowId, options } = await send<Options>('POST', '/me/confirm', {});
+    const response = await usePasskey(options);
+    await send<void>('DELETE', '/me', { flowId, response });
+    setToken(null);
+  },
   exportData: () => call<unknown>('/me/export'),
 };
 
@@ -127,6 +203,7 @@ export const admin = {
   users: () => call<User[]>('/admin/users'),
   setAdmin: (id: string, isAdmin: boolean) => send<User>('PATCH', `/admin/users/${id}`, { isAdmin }),
   deleteUser: (id: string) => send<void>('DELETE', `/admin/users/${id}`),
+  reenrolLink: (id: string) => send<{ token: string; expiresAt: number }>('POST', `/admin/users/${id}/reenrol`, {}),
   invites: () => call<Invite[]>('/admin/invites'),
   createInvite: () => send<{ code: string; expiresAt: number }>('POST', '/admin/invites', {}),
   deleteInvite: (id: number) => send<void>('DELETE', `/admin/invites/${id}`),

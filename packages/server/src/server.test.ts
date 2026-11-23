@@ -10,6 +10,7 @@ import { decryptSecret, encryptSecret, randomToken, sha256 } from './crypto.ts';
 import { openDb, type Db } from './db.ts';
 import { SyncService } from './sync.ts';
 import { Tenants } from './tenants.ts';
+import { WebAuthn } from './webauthn.ts';
 import type { BankSource, SourceTransaction } from './sources/types.ts';
 
 const key = randomBytes(32);
@@ -19,7 +20,8 @@ let tenants: Tenants;
 
 /** A user with a ready bearer session, skipping the (deliberately slow) password hash. */
 const makeUser = (username: string, isAdmin = false) => {
-  const user = tenants.createUser(username, 'scrypt$1$1$1$x$x', isAdmin);
+  const user = tenants.createUser(username, '', isAdmin);
+  core.insertPasskey({ id: `pk-${username}`, user_id: user.id, public_key: 'x', counter: 0, transports: null, device_type: null, backed_up: 0, name: 'test' });
   const token = randomToken();
   core.insertSession({ id_hash: sha256(token), user_id: user.id, csrf: 'csrf', user_agent: null, expires_at: Math.floor(Date.now() / 1000) + 3_600 });
   return { user, headers: { Authorization: `Bearer ${token}` }, ...tenants.get(user.id) };
@@ -50,7 +52,7 @@ describe('server', () => {
   beforeEach(() => {
     core = openCoreDb(':memory:');
     tenants = new Tenants(core, key, { dataDir: null, publicUrl: 'https://example.test', backfillMonths: 3, log: () => {} });
-    app = createApp({ core, tenants, sessions: new Sessions(core, 30), setupCodes: ['setup-code'], legacy: null, log: () => {} });
+    app = createApp({ core, tenants, sessions: new Sessions(core, 30), setupCodes: ['setup-code'], legacy: null, log: () => {}, webauthn: new WebAuthn({ publicUrl: null, androidCertFingerprints: [] }) });
     const me = makeUser('alice', true);
     ({ db, sync } = me);
     auth.Authorization = me.headers.Authorization;

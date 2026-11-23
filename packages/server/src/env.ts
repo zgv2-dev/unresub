@@ -20,6 +20,10 @@ export const env = {
   /** Optional fixed setup code (otherwise one is generated and logged). The old UNRESUB_API_TOKEN also works. */
   setupCodes: [process.env.UNRESUB_SETUP_CODE, process.env.UNRESUB_API_TOKEN].filter((v): v is string => !!v),
   sessionDays: num(process.env.SESSION_DAYS, 30),
+  /** Android app allowed to use passkeys for this domain (served in /.well-known/assetlinks.json). */
+  androidPackage: process.env.UNRESUB_ANDROID_PACKAGE || 'dev.unresub.app',
+  /** SHA-256 signing-certificate fingerprints of that app, comma-separated (AB:CD:...). Empty: the app can't use passkeys here. */
+  androidCertFingerprints: (process.env.UNRESUB_ANDROID_CERT_SHA256 ?? '').split(',').map(s => s.trim()).filter(Boolean),
 };
 
 /**

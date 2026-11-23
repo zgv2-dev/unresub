@@ -1,30 +1,26 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
-import type { CoreDb, SessionRow, UserRow } from './core-db.ts';
+import type { CoreDb, SessionRow, SessionScope, UserRow } from './core-db.ts';
 import { randomToken, safeEqual, sha256 } from './crypto.ts';
 import type { Tenant, Tenants } from './tenants.ts';
 
 export const SESSION_COOKIE = 'unresub_session';
 export const USERNAME = /^[a-z0-9][a-z0-9._-]{2,31}$/i;
-export const MIN_PASSWORD = 10;
 
 export type AuthEnv = {
-  Variables: { user: UserRow; session: SessionRow; tenant: Tenant; viaCookie: boolean };
+  Variables: { user: UserRow; session: SessionRow; tenant: Tenant; viaCookie: boolean; mustEnrol: boolean };
 };
 
 const nowS = () => Math.floor(Date.now() / 1000);
 
 export const publicUser = (u: UserRow) => ({ id: u.id, username: u.username, isAdmin: !!u.is_admin, createdAt: u.created_at });
 
-export const checkCredentials = (username: unknown, password: unknown) => {
-  if (typeof username !== 'string' || !USERNAME.test(username)) {
+export const checkUsername = (username: unknown) => {
+  if (typeof username !== 'string' || !USERNAME.test(username.trim())) {
     throw new HTTPException(400, { message: 'Username: 3 to 32 letters, digits, dots, dashes or underscores' });
   }
-  if (typeof password !== 'string' || password.length < MIN_PASSWORD || password.length > 512) {
-    throw new HTTPException(400, { message: `Password must be at least ${MIN_PASSWORD} characters` });
-  }
-  return { username: username.toLowerCase(), password };
+  return username.trim().toLowerCase();
 };
 
 const isHttps = (c: Context) => new URL(c.req.url).protocol === 'https:' || c.req.header('x-forwarded-proto') === 'https';
@@ -86,13 +82,14 @@ export class Sessions {
   constructor(private core: CoreDb, private days: number) {}
 
   /** Returns the raw token; only its hash is stored. */
-  create(c: Context, userId: string, { cookie }: { cookie: boolean }) {
+  create(c: Context, userId: string, { cookie, scope = 'full' }: { cookie: boolean; scope?: SessionScope }) {
     const token = randomToken(32);
     const csrf = randomToken(24);
     this.core.insertSession({
       id_hash: sha256(token),
       user_id: userId,
       csrf,
+      scope,
       user_agent: c.req.header('user-agent')?.slice(0, 200) ?? null,
       expires_at: nowS() + this.days * 86_400,
     });
@@ -127,6 +124,11 @@ export class Sessions {
 }
 
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
+/** All a session may do before the account has a passkey (recovery, re-enrol link, old password account). */
+const ENROL_PATHS = new Set(['/api/me', '/api/me/passkeys/options', '/api/me/passkeys/verify', '/api/auth/logout']);
+
+/** A session must add a passkey first when it came from a recovery path or the account has none. */
+export const mustEnrol = (core: CoreDb, session: SessionRow) => session.scope === 'enrol' || core.passkeyCount(session.user_id) === 0;
 
 /**
  * Loads the user and their own database for /api routes. Cookie sessions must echo the
@@ -140,6 +142,9 @@ export const requireUser = (core: CoreDb, sessions: Sessions, tenants: Tenants):
   if (found.viaCookie && !SAFE.has(c.req.method) && !safeEqual(c.req.header('x-csrf-token') ?? '', found.session.csrf)) {
     throw new HTTPException(403, { message: 'Missing or bad CSRF token, reload the page' });
   }
+  const enrol = mustEnrol(core, found.session);
+  if (enrol && !ENROL_PATHS.has(c.req.path)) throw new HTTPException(403, { message: 'Add a passkey to continue' });
+  c.set('mustEnrol', enrol);
   c.set('user', user);
   c.set('session', found.session);
   c.set('viaCookie', found.viaCookie);

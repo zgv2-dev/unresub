@@ -9,7 +9,7 @@ import { CardsTab } from './components/CardsTab.tsx';
 import { Icon, type IconName } from './components/Icon.tsx';
 import { SubscriptionsTable } from './components/SubscriptionsTable.tsx';
 import { useMedia } from './hooks.ts';
-import { Login, Logo } from './components/Login.tsx';
+import { Enrol, Login, Logo, RecoveryCodes } from './components/Login.tsx';
 import { Summary } from './components/Summary.tsx';
 import { SubscriptionRow } from './components/SubscriptionRow.tsx';
 import { SubscriptionSheet } from './components/SubscriptionSheet.tsx';
@@ -22,18 +22,30 @@ type Tab = 'subs' | 'tx' | 'cards';
 export const App = () => {
   // undefined: loading; null: server unreachable.
   const [status, setStatus] = useState<AuthStatus | null | undefined>(undefined);
+  const [codes, setCodes] = useState<string[] | null>(null);
   const refresh = useCallback(() => auth.status().then(setStatus, () => setStatus(null)), []);
   useEffect(() => void refresh(), [refresh]);
 
-  const user = status?.user;
-  if (status === undefined) return <main className="login" aria-busy><Logo size={28} /></main>;
-  if (!user) {
-    return <Login key={String(status?.setupRequired)} status={status} onDone={u => setStatus(s => s && { ...s, setupRequired: false, user: u })} onServerChange={() => void refresh()} />;
-  }
   const signOut = async (server = true) => {
     await (server ? auth.logout() : auth.forget());
     void refresh();
   };
+  const user = status?.user;
+  if (status === undefined) return <main className="login" aria-busy><Logo size={28} /></main>;
+  if (codes?.length) return <RecoveryCodes codes={codes} onDone={() => setCodes(null)} />;
+  if (!user) {
+    return (
+      <Login
+        key={String(status?.setupRequired)}
+        status={status}
+        onDone={r => (setCodes(r.recoveryCodes ?? null), setStatus(s => s && { ...s, setupRequired: false, user: r.user, mustEnrol: r.mustEnrol }))}
+        onServerChange={() => void refresh()}
+      />
+    );
+  }
+  if (status.mustEnrol) {
+    return <Enrol username={user.username} onDone={c => (setCodes(c), setStatus(s => s && { ...s, mustEnrol: false }))} onCancel={() => void signOut()} />;
+  }
   return <Dashboard user={user} onLogout={() => void signOut()} onExpired={() => void signOut(false)} />;
 };
 

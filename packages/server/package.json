@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.1.11",
+    "@simplewebauthn/server": "^13.3.3",
     "@unresub/core": "workspace:*",
     "hono": "^4.13.21"
   },

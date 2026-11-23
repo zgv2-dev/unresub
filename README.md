@@ -13,7 +13,7 @@ monobank only. Use a monobank USD/EUR card as the dedicated subscriptions card. 
 
 ## Self-hosting
 
-UnReSub is a self-hosted app: one server, many people, each with their own login and their own monobank data. Run the published image:
+UnReSub is a self-hosted app: one server, many people, each signing in with their own passkey (no passwords) and seeing only their own monobank data. Run the published image:
 
 ```sh
 docker run -d -p 8787:8787 -v unresub-data:/data ghcr.io/zgv2-dev/unresub:latest
@@ -46,12 +46,12 @@ One-time setup in GitHub repo settings:
 
 The app asks for the server address on first start, so one APK works with any UnReSub server. Optionally set the repo **variable** `UNRESUB_API_URL` to prefill it.
 
-1. **Secrets** for a signed release (optional; debug builds work without them):
+1. **Secrets** for signing (needed for passkeys in the app: Android only lets an app use passkeys for a domain whose `assetlinks.json` lists the app's signing certificate, so the key must stay the same across builds):
    ```sh
    keytool -genkeypair -v -keystore unresub.jks -alias unresub -keyalg RSA -keysize 4096 -validity 10000
    base64 -w0 unresub.jks   # macOS: base64 -i unresub.jks
    ```
-   Add `ANDROID_KEYSTORE_BASE64` (the base64 output), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`unresub`), `ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe: updates must be signed with the same key.
+   Add `ANDROID_KEYSTORE_BASE64` (the base64 output), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`unresub`), `ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe: updates must be signed with the same key. With the secrets set, both the debug and release APKs use this key, and the workflow's summary prints the certificate's SHA-256 fingerprint: set it as `UNRESUB_ANDROID_CERT_SHA256` on the server.
 
 Local build (needs Android SDK + JDK 21): `cd packages/mobile && pnpm sync && cd android && ./gradlew assembleDebug`.
 
@@ -63,7 +63,7 @@ Local build (needs Android SDK + JDK 21): `cd packages/mobile && pnpm sync && cd
 
 ## Security
 
-- Accounts with scrypt-hashed passwords; browser sessions are httpOnly cookies with a CSRF token, the app uses a bearer session token. Only token hashes are stored.
+- Passkeys only (WebAuthn, user verification required). The relying-party id is the `PUBLIC_URL` host; the Android app's Credential Manager origin is accepted when its certificate is in `UNRESUB_ANDROID_CERT_SHA256`. Recovery is by one-time codes or an admin's single-use 24-hour link, both of which only allow adding a passkey. Browser sessions are httpOnly cookies with a CSRF token, the app uses a bearer session token. Only hashes of tokens and codes are stored.
 - Each user has their own SQLite file (`users/<id>.db`) and their own data key, wrapped by the instance key (`UNRESUB_SECRET_KEY` or the generated `secret.key`). Bank tokens are encrypted with the user's key (AES-256-GCM), bound to their row id, and never returned by the API or logged.
 - Admins manage accounts, not data: there is no endpoint that reads another user's database.
 - The webhook URL carries a random secret, compared in constant time, and routes to exactly one user.

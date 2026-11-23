@@ -12,7 +12,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (
   id            TEXT PRIMARY KEY,
   username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  password_hash TEXT NOT NULL,
+  password_hash TEXT NOT NULL,             -- '' once the account has a passkey (legacy accounts only)
   is_admin      INTEGER NOT NULL DEFAULT 0,
   data_key_enc  TEXT NOT NULL,             -- the user's data key, wrapped by the instance key
   created_at    INTEGER NOT NULL
@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id_hash    TEXT PRIMARY KEY,             -- sha256 of the token; the token itself is never stored
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   csrf       TEXT NOT NULL,
+  scope      TEXT NOT NULL DEFAULT 'full', -- 'enrol': may only add a passkey (recovery, re-enrol, password migration)
   user_agent TEXT,
   created_at INTEGER NOT NULL,
   last_seen  INTEGER NOT NULL,
@@ -49,6 +50,37 @@ CREATE TABLE IF NOT EXISTS source_routes (
   user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- WebAuthn credentials. The only way to sign in (passwords are only kept until a passkey replaces them).
+CREATE TABLE IF NOT EXISTS passkeys (
+  id           TEXT PRIMARY KEY,          -- credential id, base64url
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  public_key   TEXT NOT NULL,             -- COSE key, base64url
+  counter      INTEGER NOT NULL DEFAULT 0,
+  transports   TEXT,                      -- JSON array
+  device_type  TEXT,                      -- 'singleDevice' | 'multiDevice'
+  backed_up    INTEGER NOT NULL DEFAULT 0,
+  name         TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  last_used_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS passkeys_user ON passkeys(user_id);
+
+-- One-time recovery codes (hashed). Using one gives a session that can only add a new passkey.
+CREATE TABLE IF NOT EXISTS recovery_codes (
+  code_hash TEXT PRIMARY KEY,
+  user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  used_at   INTEGER
+);
+
+-- Admin-issued, single-use, short-lived links to add a passkey to someone's account.
+CREATE TABLE IF NOT EXISTS reenrol_tokens (
+  token_hash TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  expires_at INTEGER NOT NULL,
+  used_at    INTEGER
+);
+
 -- Public monobank /bank/currency snapshots, shared by everyone.
 CREATE TABLE IF NOT EXISTS rate_snapshots (
   fetched_at INTEGER NOT NULL,
@@ -69,10 +101,26 @@ export interface UserRow {
   created_at: number;
 }
 
+export interface PasskeyRow {
+  id: string;
+  user_id: string;
+  public_key: string;
+  counter: number;
+  transports: string | null;
+  device_type: string | null;
+  backed_up: number;
+  name: string;
+  created_at: number;
+  last_used_at: number | null;
+}
+
+export type SessionScope = 'full' | 'enrol';
+
 export interface SessionRow {
   id_hash: string;
   user_id: string;
   csrf: string;
+  scope: SessionScope;
   user_agent: string | null;
   created_at: number;
   last_seen: number;
@@ -86,6 +134,8 @@ const now = () => Math.floor(Date.now() / 1000);
 export const openCoreDb = (path: string) => {
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
+  const cols = (t: string) => new Set((db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map(c => c.name));
+  if (!cols('sessions').has('scope')) db.exec("ALTER TABLE sessions ADD COLUMN scope TEXT NOT NULL DEFAULT 'full'");
 
   const q = {
     userCount: db.prepare('SELECT COUNT(*) AS n FROM users'),
@@ -98,7 +148,24 @@ export const openCoreDb = (path: string) => {
     deleteUser: db.prepare('DELETE FROM users WHERE id = ?'),
     adminCount: db.prepare('SELECT COUNT(*) AS n FROM users WHERE is_admin = 1'),
 
-    insertSession: db.prepare('INSERT INTO sessions (id_hash, user_id, csrf, user_agent, created_at, last_seen, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+    insertSession: db.prepare('INSERT INTO sessions (id_hash, user_id, csrf, scope, user_agent, created_at, last_seen, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
+    setScope: db.prepare('UPDATE sessions SET scope = ? WHERE id_hash = ?'),
+
+    passkeys: db.prepare('SELECT * FROM passkeys WHERE user_id = ? ORDER BY created_at'),
+    passkey: db.prepare('SELECT * FROM passkeys WHERE id = ?'),
+    passkeyCount: db.prepare('SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?'),
+    insertPasskey: db.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, device_type, backed_up, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'),
+    usePasskey: db.prepare('UPDATE passkeys SET counter = ?, last_used_at = ? WHERE id = ?'),
+    renamePasskey: db.prepare('UPDATE passkeys SET name = ? WHERE id = ? AND user_id = ?'),
+    deletePasskey: db.prepare('DELETE FROM passkeys WHERE id = ? AND user_id = ?'),
+
+    clearRecovery: db.prepare('DELETE FROM recovery_codes WHERE user_id = ?'),
+    insertRecovery: db.prepare('INSERT INTO recovery_codes (code_hash, user_id) VALUES (?, ?)'),
+    useRecovery: db.prepare('UPDATE recovery_codes SET used_at = ? WHERE code_hash = ? AND user_id = ? AND used_at IS NULL'),
+    recoveryLeft: db.prepare('SELECT COUNT(*) AS n FROM recovery_codes WHERE user_id = ? AND used_at IS NULL'),
+
+    insertReenrol: db.prepare('INSERT INTO reenrol_tokens (token_hash, user_id, created_by, expires_at) VALUES (?, ?, ?, ?)'),
+    useReenrol: db.prepare('UPDATE reenrol_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? RETURNING user_id'),
     session: db.prepare('SELECT * FROM sessions WHERE id_hash = ? AND expires_at > ?'),
     touchSession: db.prepare('UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id_hash = ?'),
     deleteSession: db.prepare('DELETE FROM sessions WHERE id_hash = ?'),
@@ -149,8 +216,30 @@ export const openCoreDb = (path: string) => {
     deleteUser: (id: string) => void q.deleteUser.run(id),
     adminCount: () => (q.adminCount.get() as { n: number }).n,
 
-    insertSession: (s: Omit<SessionRow, 'created_at' | 'last_seen'>) =>
-      void q.insertSession.run(s.id_hash, s.user_id, s.csrf, s.user_agent, now(), now(), s.expires_at),
+    insertSession: (s: Omit<SessionRow, 'created_at' | 'last_seen' | 'scope'> & { scope?: SessionScope }) =>
+      void q.insertSession.run(s.id_hash, s.user_id, s.csrf, s.scope ?? 'full', s.user_agent, now(), now(), s.expires_at),
+    setSessionScope: (idHash: string, scope: SessionScope) => void q.setScope.run(scope, idHash),
+
+    listPasskeys: (userId: string) => q.passkeys.all(userId) as unknown as PasskeyRow[],
+    getPasskey: (id: string) => q.passkey.get(id) as unknown as PasskeyRow | undefined,
+    passkeyCount: (userId: string) => (q.passkeyCount.get(userId) as { n: number }).n,
+    insertPasskey: (p: Omit<PasskeyRow, 'created_at' | 'last_used_at'>) =>
+      void q.insertPasskey.run(p.id, p.user_id, p.public_key, p.counter, p.transports, p.device_type, p.backed_up, p.name, now()),
+    usePasskey: (id: string, counter: number) => void q.usePasskey.run(counter, now(), id),
+    renamePasskey: (userId: string, id: string, name: string) => q.renamePasskey.run(name, id, userId).changes === 1,
+    deletePasskey: (userId: string, id: string) => q.deletePasskey.run(id, userId).changes === 1,
+
+    /** Replaces all of the user's recovery codes with these (already hashed). */
+    setRecoveryCodes: (userId: string, hashes: string[]) => {
+      q.clearRecovery.run(userId);
+      for (const h of hashes) q.insertRecovery.run(h, userId);
+    },
+    useRecoveryCode: (userId: string, hash: string) => q.useRecovery.run(now(), hash, userId).changes === 1,
+    recoveryCodesLeft: (userId: string) => (q.recoveryLeft.get(userId) as { n: number }).n,
+
+    insertReenrol: (tokenHash: string, userId: string, createdBy: string, expiresAt: number) => void q.insertReenrol.run(tokenHash, userId, createdBy, expiresAt),
+    /** Atomic single use; returns the user id or null. */
+    useReenrol: (tokenHash: string) => (q.useReenrol.get(now(), tokenHash, now()) as { user_id: string } | undefined)?.user_id ?? null,
     getSession: (idHash: string) => q.session.get(idHash, now()) as unknown as SessionRow | undefined,
     touchSession: (idHash: string, expiresAt: number) => void q.touchSession.run(now(), expiresAt, idHash),
     deleteSession: (idHash: string) => void q.deleteSession.run(idHash),

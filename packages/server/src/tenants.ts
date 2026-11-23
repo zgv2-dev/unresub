@@ -43,8 +43,7 @@ export class Tenants {
   }
 
   /** Creates the account row with a fresh data key. Call inside a core transaction. */
-  createUser(username: string, passwordHash: string, isAdmin: boolean) {
-    const id = `u_${randomToken(12)}`;
+  createUser(username: string, passwordHash: string, isAdmin: boolean, id = `u_${randomToken(12)}`) {
     this.core.insertUser({ id, username, password_hash: passwordHash, is_admin: isAdmin ? 1 : 0, data_key_enc: newDataKey(this.instanceKey, id) });
     return this.core.getUser(id)!;
   }

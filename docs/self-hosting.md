@@ -1,8 +1,8 @@
 # Self-hosting UnReSub
 
-One UnReSub server can serve a whole family or a group of friends. Each person signs in with their own account and connects their own monobank token; nobody, admins included, can see anyone else's cards or subscriptions.
+One UnReSub server can serve a whole family or a group of friends. Each person signs in with their own passkey (there are no passwords) and connects their own monobank token; nobody, admins included, can see anyone else's cards or subscriptions.
 
-What you need: something that runs a Docker container all the time, a persistent folder or volume for `/data`, and (recommended) an https address so monobank can send instant updates.
+What you need: something that runs a Docker container all the time, a persistent folder or volume for `/data`, and an https address. Passkeys only work over https (or on `localhost`), and monobank sends instant updates only to https.
 
 ## Quick start with Docker Compose
 
@@ -12,7 +12,7 @@ docker compose up -d
 docker compose logs unresub | grep -A3 "first-run setup"
 ```
 
-Open `http://<server>:8787`, enter the setup code from the log and create the admin account. Then connect monobank with a personal token from https://api.monobank.ua.
+Open your https address (or `http://localhost:8787` on the same machine), enter the setup code from the log, pick a username and create a passkey. Save the recovery codes it shows. Then connect monobank with a personal token from https://api.monobank.ua.
 
 Plain Docker works the same way:
 
@@ -29,7 +29,9 @@ Nothing is required. All variables are optional:
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `PUBLIC_URL` | none | Public https address, e.g. `https://unresub.example.com`. Turns on monobank webhooks. |
+| `PUBLIC_URL` | none | Public https address, e.g. `https://unresub.example.com`. Its host is the passkey domain, and it turns on monobank webhooks. Set it before anyone creates a passkey: passkeys are tied to this domain. |
+| `UNRESUB_ANDROID_CERT_SHA256` | none | Signing-certificate fingerprint of the Android app allowed to use passkeys here (comma-separate several). Published in `/.well-known/assetlinks.json`. See [Android app](#android-app). |
+| `UNRESUB_ANDROID_PACKAGE` | `dev.unresub.app` | Package name for `assetlinks.json`, if you build the app under another id. |
 | `PORT` | `8787` | Port the server listens on. |
 | `DATA_DIR` | `/data` in Docker | Where all data lives. |
 | `UNRESUB_SECRET_KEY` | generated | Instance key, 32 bytes base64 (`openssl rand -base64 32`). If unset, it's created once in `/data/secret.key`. |
@@ -38,13 +40,18 @@ Nothing is required. All variables are optional:
 | `BACKFILL_MONTHS` | `12` | How much history the first sync loads. |
 | `SESSION_DAYS` | `30` | How long a sign-in lasts without use. |
 
-## Accounts
+## Accounts and passkeys
+
+There are no passwords. Everyone signs in with a passkey: Face ID or fingerprint on a phone, Windows Hello, a password manager such as 1Password or Bitwarden, or a security key.
 
 - **First run.** Until an admin exists, the app shows a setup screen that needs the setup code from the server log. That stops a stranger who finds your address from claiming the server first.
-- **Adding people.** By default sign-up is invite-only: Account (the avatar) → **Invite someone** gives a one-use link valid for 7 days. Or switch on **Anyone with the link can sign up**.
-- **Admins** can invite, remove people, and make others admin. They can't open anyone else's data.
-- **Everyone** can change their password, export their data as JSON, and delete their account with everything in it.
-- Passwords are hashed with scrypt. Browser sessions use an httpOnly cookie plus a CSRF token; the Android app gets its own revocable token. Repeated wrong passwords are throttled per account and per address.
+- **Adding people.** Sign-up is invite-only by default: Account (the avatar) → **Invite someone** gives a one-use link valid for 7 days. Or switch on **Anyone with the link can sign up**. Opening the link lets the person pick a username and create a passkey.
+- **More passkeys.** Account → **Add a passkey** for each device that doesn't sync passkeys with the others. Passkeys can be renamed and removed (never the last one).
+- **Recovery codes.** Ten one-time codes are shown when the account is created. **Lost your passkey?** on the sign-in screen takes a username and one code, then asks for a new passkey; nothing else works until one is added. Account → **New recovery codes** replaces them.
+- **Admin passkey link.** Someone lost their passkeys and their codes? An admin taps the key icon next to their name. The single-use link is valid 24 hours and only lets them add a new passkey.
+- **Admins** can invite, remove people, make others admin and issue passkey links. They can't open anyone else's data.
+- **Everyone** can export their data as JSON and delete their account (confirmed with a passkey).
+- Browser sessions use an httpOnly cookie plus a CSRF token; the Android app gets its own revocable token. Failed sign-ins and wrong codes are throttled per account and per address.
 
 ## How data is kept apart
 
@@ -59,7 +66,7 @@ Each person's bank data is a separate database file, so a request can only ever 
 
 ## https and a reverse proxy
 
-monobank only sends webhooks to https addresses, and the Android app refuses plain http. Put the container behind any reverse proxy that terminates TLS and set `PUBLIC_URL` to the public address.
+Passkeys need https, monobank only sends webhooks to https addresses, and the Android app refuses plain http. Put the container behind any reverse proxy that terminates TLS and set `PUBLIC_URL` to the public address.
 
 Caddy (gets certificates automatically):
 
@@ -118,14 +125,24 @@ Database changes run automatically on start. Keep one replica only: SQLite files
 
 ## Android app
 
-Install the APK from the repository's [latest release](https://github.com/zgv2-dev/unresub/releases/latest). On first start it asks for your server address (for example `https://unresub.example.com`), then you sign in like on the web. One app works with any UnReSub server.
+Install the APK from the repository's [latest release](https://github.com/zgv2-dev/unresub/releases/latest). On first start it asks for your server address (for example `https://unresub.example.com`), then you sign in with a passkey like on the web. One app works with any UnReSub server.
+
+The app creates and uses passkeys through Android's Credential Manager, which only allows it for a domain that vouches for the app. Your server does that by serving `/.well-known/assetlinks.json`, built from `UNRESUB_ANDROID_CERT_SHA256`:
+
+- **Using the official APK:** set `UNRESUB_ANDROID_CERT_SHA256` to the fingerprint printed in the release notes and the build summary of the [Android workflow](https://github.com/zgv2-dev/unresub/actions/workflows/android.yml).
+- **Building your own APK:** sign it with your own key (see the README) and set its fingerprint instead.
+- Check it: `https://<your server>/.well-known/assetlinks.json` must show the fingerprint. Android caches this file, so after a change, clear the Google Play services cache or wait a day.
+
+Without it the web app still works with passkeys; only the Android app can't sign in.
 
 ## Moving from the single-user version
 
-Older versions kept everything in `/data/unresub.db` and used `UNRESUB_API_TOKEN`. When the new version starts with that file and no accounts, the setup screen says existing data was found. The old `UNRESUB_API_TOKEN` value works as the setup code (as does the code in the log). Creating the admin then:
+Older versions kept everything in `/data/unresub.db` and used `UNRESUB_API_TOKEN`. When the new version starts with that file and no accounts, the setup screen says existing data was found. The old `UNRESUB_API_TOKEN` value works as the setup code (as does the code in the log). Creating the admin (with a passkey) then:
 
 1. copies `unresub.db` to `unresub.db.pre-multiuser-<time>.bak`,
 2. moves it to `users/<your id>.db`,
 3. re-encrypts the monobank token with your new data key and re-registers the webhook.
 
 Webhooks keep landing in the old file until you finish setup, so nothing is lost in between. After that, `UNRESUB_API_TOKEN` and `DB_PATH` can be removed.
+
+Accounts made with a password before passkeys arrived: on the sign-in screen, tap **I had a password**. The password works once more, only to add a passkey, and is deleted right after.

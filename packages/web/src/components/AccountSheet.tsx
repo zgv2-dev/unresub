@@ -1,10 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { admin, auth, getServer, type Invite, type User } from '../api.ts';
+import { useEffect, useState } from 'react';
+import { admin, auth, getServer, type Invite, type Passkey, type User } from '../api.ts';
 import { fmtDate } from '../format.ts';
 import { Icon } from './Icon.tsx';
 import { Sheet } from './Sheet.tsx';
 
-/** Account: password, export, sign out, delete. Admins also manage who can join. Admins never see others' bank data. */
+/** Account: passkeys, recovery codes, export, sign out, delete. Admins also manage who can join. Admins never see others' bank data. */
 export const AccountSheet = ({ user, onClose, onLogout }: { user: User; onClose: () => void; onLogout: () => void }) => {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const run = async (fn: () => Promise<unknown>, ok?: string) => {
@@ -19,12 +19,25 @@ export const AccountSheet = ({ user, onClose, onLogout }: { user: User; onClose:
     }
   };
 
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const changePassword = async (e: FormEvent) => {
-    e.preventDefault();
-    if (await run(() => auth.changePassword(current, next), 'Password changed. Other devices were signed out.')) setCurrent(''), setNext('');
+  const [passkeys, setPasskeys] = useState<Passkey[]>([]);
+  const [codesLeft, setCodesLeft] = useState<number | null>(null);
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const loadKeys = () => Promise.all([auth.passkeys(), auth.me()]).then(([p, me]) => (setPasskeys(p), setCodesLeft(me.recoveryCodesLeft)), () => {});
+  useEffect(() => void loadKeys(), []);
+  const addPasskey = () => run(async () => {
+    const r = await auth.addPasskey();
+    if (r.recoveryCodes) setCodes(r.recoveryCodes);
+    await loadKeys();
+  }, 'Passkey added.');
+  const rename = (p: Passkey) => {
+    const name = prompt('Passkey name', p.name)?.trim();
+    if (name && name !== p.name) void run(() => auth.renamePasskey(p.id, name).then(loadKeys));
   };
+  const remove = (p: Passkey) => confirm(`Remove "${p.name}"? You won't be able to sign in with it.`) && void run(() => auth.removePasskey(p.id).then(loadKeys));
+  const newCodes = () => confirm('Make new recovery codes? The old ones stop working.') && void run(async () => {
+    setCodes((await auth.newRecoveryCodes()).recoveryCodes);
+    await loadKeys();
+  });
 
   const exportData = () =>
     run(async () => {
@@ -38,10 +51,8 @@ export const AccountSheet = ({ user, onClose, onLogout }: { user: User; onClose:
     });
 
   const [deleting, setDeleting] = useState(false);
-  const [confirmPw, setConfirmPw] = useState('');
-  const deleteAccount = async (e: FormEvent) => {
-    e.preventDefault();
-    if (await run(() => auth.deleteAccount(confirmPw))) onLogout();
+  const deleteAccount = async () => {
+    if (await run(() => auth.deleteAccount())) onLogout();
   };
 
   return (
@@ -60,12 +71,31 @@ export const AccountSheet = ({ user, onClose, onLogout }: { user: User; onClose:
     >
       {msg && <p className={`small ${msg.ok ? 'muted' : 'error'}`}>{msg.text}</p>}
 
-      <div className="divider-title">Password</div>
-      <form onSubmit={changePassword} className="stack">
-        <input className="input" type="password" placeholder="Current password" value={current} onChange={e => setCurrent(e.target.value)} autoComplete="current-password" />
-        <input className="input" type="password" placeholder="New password, 10+ characters" value={next} onChange={e => setNext(e.target.value)} autoComplete="new-password" minLength={10} />
-        <button className="btn soft sm" disabled={!current || next.length < 10}>Change password</button>
-      </form>
+      <div className="divider-title">Passkeys</div>
+      <ul className="list card">
+        {passkeys.map(p => (
+          <li key={p.id} className="passkey-row">
+            <Icon name="key" size={18} />
+            <span>
+              <strong className="clamp-1">{p.name}</strong>
+              <span className="xs muted">{p.synced ? 'Synced · ' : ''}added {fmtDate(p.createdAt)}{p.lastUsedAt ? ` · used ${fmtDate(p.lastUsedAt)}` : ''}</span>
+            </span>
+            <button className="btn ghost sm" onClick={() => rename(p)} aria-label={`Rename ${p.name}`}><Icon name="pencil" size={16} /></button>
+            {passkeys.length > 1 && <button className="btn ghost sm" onClick={() => remove(p)} aria-label={`Remove ${p.name}`}><Icon name="trash" size={16} /></button>}
+          </li>
+        ))}
+      </ul>
+      <div className="sheet-actions" style={{ marginTop: 10 }}>
+        <button className="btn soft sm" onClick={() => void addPasskey()}><Icon name="plus" size={16} /> Add a passkey</button>
+        <button className="btn ghost sm" onClick={newCodes}>New recovery codes{codesLeft != null ? ` (${codesLeft} left)` : ''}</button>
+      </div>
+      {codes && (
+        <div className="fix-row" style={{ marginTop: 10, display: 'block' }}>
+          <strong>Save these recovery codes. Each works once; they won't be shown again.</strong>
+          <ul className="codes num">{codes.map(c => <li key={c}>{c}</li>)}</ul>
+          <button className="btn soft sm" onClick={() => void navigator.clipboard?.writeText(codes.join('\n')).catch(() => {})}><Icon name="copy" size={16} /> Copy</button>
+        </div>
+      )}
 
       {user.isAdmin && <AdminPanel user={user} />}
 
@@ -76,11 +106,10 @@ export const AccountSheet = ({ user, onClose, onLogout }: { user: User; onClose:
         <button className="btn ghost sm" onClick={() => setDeleting(v => !v)}><Icon name="trash" size={16} /> Delete account</button>
       </div>
       {deleting && (
-        <form onSubmit={deleteAccount} className="stack" style={{ marginTop: 12 }}>
-          <p className="small muted">This deletes your account, your bank connections and all your data on this server. It can't be undone.</p>
-          <input className="input" type="password" placeholder="Password to confirm" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} autoComplete="current-password" />
-          <button className="btn danger sm" disabled={!confirmPw}>Delete everything</button>
-        </form>
+        <div className="stack" style={{ marginTop: 12 }}>
+          <p className="small muted">This deletes your account, your bank connections and all your data on this server. It can't be undone. Confirm with your passkey.</p>
+          <button className="btn danger sm" onClick={() => void deleteAccount()}>Delete everything</button>
+        </div>
       )}
     </Sheet>
   );
@@ -91,6 +120,7 @@ const AdminPanel = ({ user }: { user: User }) => {
   const [invites, setInvites] = useState<Invite[]>([]);
   const [signup, setSignup] = useState<'invite' | 'open'>('invite');
   const [link, setLink] = useState<string | null>(null);
+  const [linkLabel, setLinkLabel] = useState('Invite link, valid 7 days, one use');
   const [error, setError] = useState<string | null>(null);
 
   const load = () =>
@@ -107,6 +137,16 @@ const AdminPanel = ({ user }: { user: User }) => {
       // The web origin is the server; inside the app, use the server URL.
       const url = `${getServer() || location.origin}/?invite=${encodeURIComponent(code)}`;
       setLink(url);
+      setLinkLabel('Invite link, valid 7 days, one use');
+      await navigator.clipboard?.writeText(url).catch(() => {});
+    });
+
+  const reenrol = (u: User) =>
+    act(async () => {
+      const { token } = await admin.reenrolLink(u.id);
+      const url = `${getServer() || location.origin}/?reenrol=${encodeURIComponent(token)}`;
+      setLink(url);
+      setLinkLabel(`Passkey link for ${u.username}, valid 24 hours, one use`);
       await navigator.clipboard?.writeText(url).catch(() => {});
     });
 
@@ -121,10 +161,11 @@ const AdminPanel = ({ user }: { user: User }) => {
           <li key={u.id} className="toggle-row" style={{ padding: '10px 14px' }}>
             <span>
               <strong>{u.username}</strong>
-              <span className="xs muted"> {u.isAdmin ? '· admin' : ''}</span>
+              <span className="xs muted"> {u.isAdmin ? '· admin' : ''}{u.passkeys === 0 ? ' · no passkey yet' : ''}</span>
             </span>
             {u.id !== user.id && (
               <span className="fix-btns">
+                <button className="btn ghost sm" onClick={() => void reenrol(u)} title="Link to add a new passkey" aria-label={`Passkey link for ${u.username}`}><Icon name="key" size={16} /></button>
                 <button className="btn ghost sm" onClick={() => void act(() => admin.setAdmin(u.id, !u.isAdmin))}>{u.isAdmin ? 'Remove admin' : 'Make admin'}</button>
                 <button className="btn ghost sm" onClick={() => confirm(`Delete ${u.username} and all their data?`) && void act(() => admin.deleteUser(u.id))} aria-label={`Delete ${u.username}`}><Icon name="trash" size={16} /></button>
               </span>
@@ -132,6 +173,12 @@ const AdminPanel = ({ user }: { user: User }) => {
           </li>
         ))}
       </ul>
+      {link && (
+        <div className="fix-row" style={{ marginTop: 8 }}>
+          <span><strong>{linkLabel}</strong><em style={{ wordBreak: 'break-all' }}>{link}</em></span>
+          <button className="btn ghost sm" onClick={() => void navigator.clipboard?.writeText(link)} aria-label="Copy"><Icon name="copy" size={16} /></button>
+        </div>
+      )}
       <p className="xs faint" style={{ margin: '8px 4px' }}>Each person's cards and subscriptions are private to them, admins included.</p>
 
       <label className="toggle-row small" style={{ padding: '4px' }}>
@@ -144,12 +191,6 @@ const AdminPanel = ({ user }: { user: User }) => {
       {signup === 'invite' && (
         <div className="stack" style={{ marginTop: 8 }}>
           <button className="btn soft sm" onClick={() => void invite()}><Icon name="plus" size={16} /> Invite someone</button>
-          {link && (
-            <div className="fix-row">
-              <span><strong>Invite link, valid 7 days, one use</strong><em style={{ wordBreak: 'break-all' }}>{link}</em></span>
-              <button className="btn ghost sm" onClick={() => void navigator.clipboard?.writeText(link)} aria-label="Copy"><Icon name="copy" size={16} /></button>
-            </div>
-          )}
           {!!pending.length && <p className="xs faint">{pending.length} unused invite{pending.length > 1 ? 's' : ''}.</p>}
         </div>
       )}

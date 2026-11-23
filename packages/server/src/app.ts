@@ -21,8 +21,9 @@ import {
   type Period,
 } from '@unresub/core';
 import {
-  checkCredentials,
+  checkUsername,
   guard,
+  mustEnrol,
   limits as makeLimits,
   publicUser,
   recordFailure,
@@ -32,12 +33,13 @@ import {
   type Limits,
   type Sessions,
 } from './auth.ts';
-import type { CoreDb, UserRow } from './core-db.ts';
-import { burnPasswordCheck, hashPassword, randomToken, safeEqual, sha256, verifyPassword } from './crypto.ts';
+import type { CoreDb, PasskeyRow, SessionScope, UserRow } from './core-db.ts';
+import { burnPasswordCheck, randomToken, safeEqual, sha256, verifyPassword } from './crypto.ts';
 import type { Db, OverrideRow } from './db.ts';
 import { MonobankError } from './sources/monobank.ts';
 import type { SyncService } from './sync.ts';
 import type { Tenants } from './tenants.ts';
+import type { WebAuthn } from './webauthn.ts';
 
 const PERIODS: Period[] = ['weekly', 'monthly', 'quarterly', 'semiannual', 'annual'];
 
@@ -193,9 +195,23 @@ export interface AppDeps {
   setupCodes: string[];
   /** A pre-multi-user database waiting for the first admin; set to null once adopted. */
   legacy: LegacyData | null;
+  webauthn: WebAuthn;
+  /** The Android app allowed to use passkeys here (for assetlinks.json). */
+  android?: { package: string; fingerprints: string[] };
   limits?: Limits;
   log?: (msg: string) => void;
 }
+
+/** Recovery codes are compared case- and dash-insensitively. */
+const normalizedCodeHash = (code: string) => sha256(code.toLowerCase().replace(/[^a-z0-9]/g, ''));
+
+/** A default passkey name from the device, e.g. "Android" or "Mac". */
+const passkeyName = (name: unknown, c: Context) => {
+  if (typeof name === 'string' && name.trim()) return name.trim().slice(0, 60);
+  const ua = c.req.header('user-agent') ?? '';
+  const os = [['Android', 'Android'], ['iPhone', 'iPhone'], ['iPad', 'iPad'], ['Mac OS', 'Mac'], ['Windows', 'Windows'], ['Linux', 'Linux']].find(([k]) => ua.includes(k!))?.[1];
+  return os ? `${os} passkey` : 'Passkey';
+};
 
 
 /** Unauthenticated JSON endpoints insist on a JSON content type: a cross-site form can't send one without CORS. */
@@ -225,6 +241,16 @@ export const createApp = (deps: AppDeps) => {
 
   app.get('/healthz', c => c.text('ok'));
 
+  // Lets the Android app use passkeys for this domain (Credential Manager checks this file).
+  app.get('/.well-known/assetlinks.json', c => {
+    const fps = deps.android?.fingerprints ?? [];
+    if (!fps.length) return c.json([], 404);
+    return c.json([{
+      relation: ['delegate_permission/common.handle_all_urls', 'delegate_permission/common.get_login_creds'],
+      target: { namespace: 'android_app', package_name: deps.android!.package, sha256_cert_fingerprints: fps },
+    }]);
+  });
+
   // --- Webhooks (public, authenticated by the secret in the path). Each source id routes to one user. ---
   const hookTarget = (sourceId: string) => {
     const userId = core.routeOf(sourceId);
@@ -253,11 +279,19 @@ export const createApp = (deps: AppDeps) => {
   // The Android app (Capacitor WebView) calls the API from https://localhost with a bearer token.
   app.use('/api/*', cors({ origin: ['https://localhost', 'capacitor://localhost'], allowHeaders: ['Authorization', 'Content-Type', 'X-CSRF-Token'] }));
 
-  // --- Auth (public) ---
-  const session = (c: Context, user: UserRow, client: unknown) => {
+  // --- Auth (public). Passkeys only: no passwords. ---
+  const webauthn = deps.webauthn;
+  const session = (c: Context, user: UserRow, client: unknown, scope: SessionScope = 'full') => {
     const app = client === 'app';
-    const { token, csrf } = sessions.create(c, user.id, { cookie: !app });
-    return { user: publicUser(user), csrfToken: app ? null : csrf, ...(app && { token }) };
+    const { token, csrf } = sessions.create(c, user.id, { cookie: !app, scope });
+    return { user: publicUser(user), mustEnrol: scope === 'enrol', csrfToken: app ? null : csrf, ...(app && { token }) };
+  };
+
+  /** Ten one-time codes, shown once. Returns the plain codes; only hashes are stored. */
+  const newRecoveryCodes = (userId: string) => {
+    const codes = Array.from({ length: 10 }, () => randomToken(10).replace(/[-_]/g, 'x').slice(0, 12).replace(/(.{4})(.{4})(.{4})/, '$1-$2-$3').toLowerCase());
+    core.setRecoveryCodes(userId, codes.map(normalizedCodeHash));
+    return codes;
   };
 
   app.get('/api/auth/status', c => {
@@ -269,71 +303,128 @@ export const createApp = (deps: AppDeps) => {
       legacyData: !!deps.legacy,
       signup: core.signupMode(),
       user: user ? publicUser(user) : null,
+      mustEnrol: user ? mustEnrol(core, found.session) : false,
       csrfToken: user && found.viaCookie ? found.session.csrf : null,
     });
   });
 
-  app.post('/api/auth/setup', async c => {
-    if (core.userCount() > 0) throw new HTTPException(409, { message: 'Already set up, sign in instead' });
+  /**
+   * Step 1 of creating an account: setup (first admin, needs the setup code) or sign-up
+   * (open, or with an invite). Nothing is stored until the passkey is verified.
+   */
+  app.post('/api/auth/register/options', async c => {
     guard(c, limits);
     const body = await readJson(c);
-    const code = typeof body.setupCode === 'string' ? body.setupCode.trim() : '';
-    if (!deps.setupCodes.some(s => safeEqual(code, s))) {
-      recordFailure(c, limits);
-      throw new HTTPException(403, { message: 'Wrong setup code. It is printed in the server log.' });
+    const username = checkUsername(body.username);
+    const setup = core.userCount() === 0;
+    if (setup) {
+      const code = typeof body.setupCode === 'string' ? body.setupCode.trim() : '';
+      if (!deps.setupCodes.some(s => safeEqual(code, s))) {
+        recordFailure(c, limits);
+        throw new HTTPException(403, { message: 'Wrong setup code. It is printed in the server log.' });
+      }
+    } else if (core.signupMode() !== 'open') {
+      const invite = typeof body.invite === 'string' ? sha256(body.invite.trim()) : '';
+      if (!core.validInvite(invite)) {
+        recordFailure(c, limits);
+        throw new HTTPException(403, { message: 'Sign-up needs an invite link from the admin' });
+      }
     }
-    const { username, password } = checkCredentials(body.username, body.password);
-    const hash = await hashPassword(password);
-    const user = core.tx(() => {
-      if (core.userCount() > 0) throw new HTTPException(409, { message: 'Already set up, sign in instead' });
-      return tenants.createUser(username, hash, true);
-    });
-    log(`[auth] setup complete, admin account created`);
-    if (deps.legacy) {
-      const t = tenants.adoptLegacy(user.id, deps.legacy);
-      deps.legacy = null;
-      log(`[auth] existing data moved to the admin account`);
-      void t.sync.registerWebhooks().then(() => t.sync.syncAll());
-    }
-    return c.json(session(c, user, body.client), 201);
+    if (core.userByName(username)) throw new HTTPException(409, { message: 'That username is taken' });
+    const pendingId = `u_${randomToken(12)}`;
+    return c.json(await webauthn.registrationOptions(c, { id: pendingId, username }, [], { setup, invite: body.invite ?? null }));
   });
 
+  /** Step 2: the passkey is verified, then the account, passkey and recovery codes are created together. */
+  app.post('/api/auth/register/verify', async c => {
+    const body = await readJson(c);
+    const reg = await webauthn.verifyRegistration(c, body.flowId, body.response);
+    const setup = reg.meta.setup === true;
+    const invite = typeof reg.meta.invite === 'string' ? sha256(reg.meta.invite.trim()) : null;
+    const { user, codes } = core.tx(() => {
+      if (setup !== (core.userCount() === 0)) throw new HTTPException(409, { message: setup ? 'Already set up, sign in instead' : 'Finish setup first' });
+      if (core.userByName(reg.username)) throw new HTTPException(409, { message: 'That username is taken' });
+      const u = tenants.createUser(reg.username, '', setup, reg.userId);
+      if (!setup && core.signupMode() !== 'open' && !(invite && core.useInvite(invite, u.id))) {
+        throw new HTTPException(403, { message: 'That invite was already used' });
+      }
+      core.insertPasskey({ ...reg.passkey, user_id: u.id, name: passkeyName(body.name, c) });
+      return { user: u, codes: newRecoveryCodes(u.id) };
+    });
+    log(setup ? '[auth] setup complete, admin account created' : '[auth] new account created');
+    if (setup && deps.legacy) {
+      const t = tenants.adoptLegacy(user.id, deps.legacy);
+      deps.legacy = null;
+      log('[auth] existing data moved to the admin account');
+      void t.sync.registerWebhooks().then(() => t.sync.syncAll());
+    }
+    return c.json({ ...session(c, user, body.client), recoveryCodes: codes }, 201);
+  });
+
+  app.post('/api/auth/login/options', async c => {
+    guard(c, limits);
+    return c.json(await webauthn.authenticationOptions(c));
+  });
+
+  app.post('/api/auth/login/verify', async c => {
+    guard(c, limits);
+    const body = await readJson(c);
+    try {
+      const { passkey, newCounter } = await webauthn.verifyAuthentication(c, body.flowId, body.response, id => core.getPasskey(id));
+      core.usePasskey(passkey.id, newCounter);
+      const user = core.getUser(passkey.user_id)!;
+      // A passkey proves the account; an old password, if any, is no longer needed.
+      if (user.password_hash) core.setPassword(user.id, '');
+      return c.json(session(c, user, body.client));
+    } catch (e) {
+      recordFailure(c, limits);
+      throw e;
+    }
+  });
+
+  /** Lost every passkey: a one-time recovery code gives a session that can only add a new one. */
+  app.post('/api/auth/recover', async c => {
+    const body = await readJson(c);
+    const username = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
+    guard(c, limits, username);
+    const user = username ? core.userByName(username) : undefined;
+    const code = typeof body.code === 'string' ? normalizedCodeHash(body.code) : '';
+    if (!user || !core.useRecoveryCode(user.id, code)) {
+      recordFailure(c, limits, username);
+      throw new HTTPException(401, { message: 'Wrong username or recovery code' });
+    }
+    log('[auth] recovery code used');
+    return c.json(session(c, user, body.client, 'enrol'));
+  });
+
+  /** An admin's single-use link: lets that person add a passkey to their account. */
+  app.post('/api/auth/reenrol', async c => {
+    guard(c, limits);
+    const body = await readJson(c);
+    const userId = typeof body.token === 'string' ? core.useReenrol(sha256(body.token.trim())) : null;
+    const user = userId && core.getUser(userId);
+    if (!user) {
+      recordFailure(c, limits);
+      throw new HTTPException(401, { message: 'This link expired or was already used. Ask the admin for a new one.' });
+    }
+    return c.json(session(c, user, body.client, 'enrol'));
+  });
+
+  /** Accounts made before passkeys: the password works once more, only to add a passkey. Then it's deleted. */
   app.post('/api/auth/login', async c => {
     const body = await readJson(c);
     const username = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
     const password = typeof body.password === 'string' ? body.password : '';
     guard(c, limits, username);
     const user = username ? core.userByName(username) : undefined;
-    const ok = user ? await verifyPassword(password, user.password_hash) : (await burnPasswordCheck(password), false);
+    const usable = !!user?.password_hash && core.passkeyCount(user.id) === 0;
+    const ok = usable ? await verifyPassword(password, user!.password_hash) : (await burnPasswordCheck(password), false);
     if (!user || !ok) {
       recordFailure(c, limits, username);
-      throw new HTTPException(401, { message: 'Wrong username or password' });
+      throw new HTTPException(401, { message: 'Passwords are gone. Sign in with your passkey.' });
     }
     limits.user.reset(username);
-    return c.json(session(c, user, body.client));
-  });
-
-  app.post('/api/auth/signup', async c => {
-    guard(c, limits);
-    const body = await readJson(c);
-    const invite = typeof body.invite === 'string' ? sha256(body.invite.trim()) : null;
-    const open = core.signupMode() === 'open';
-    if (core.userCount() === 0) throw new HTTPException(409, { message: 'Finish setup first' });
-    if (!open && !(invite && core.validInvite(invite))) {
-      recordFailure(c, limits);
-      throw new HTTPException(403, { message: open ? 'Bad invite' : 'Sign-up needs an invite link from the admin' });
-    }
-    const { username, password } = checkCredentials(body.username, body.password);
-    const hash = await hashPassword(password);
-    const user = core.tx(() => {
-      if (core.userByName(username)) throw new HTTPException(409, { message: 'That username is taken' });
-      const u = tenants.createUser(username, hash, false);
-      // Only a still-unused invite counts; an open instance ignores a stale one.
-      if (!open && !core.useInvite(invite!, u.id)) throw new HTTPException(403, { message: 'That invite was already used' });
-      return u;
-    });
-    log(`[auth] new account created`);
-    return c.json(session(c, user, body.client), 201);
+    return c.json(session(c, user, body.client, 'enrol'));
   });
 
   // --- Everything below needs a signed-in user, and only ever sees that user's database. ---
@@ -345,20 +436,44 @@ export const createApp = (deps: AppDeps) => {
     return c.body(null, 204);
   });
 
-  api.get('/me', c => c.json(publicUser(c.var.user)));
+  api.get('/me', c => c.json({ ...publicUser(c.var.user), mustEnrol: c.var.mustEnrol, recoveryCodesLeft: core.recoveryCodesLeft(c.var.user.id) }));
 
-  api.post('/me/password', async c => {
+  // Passkeys: list, add, rename, remove (never the last one).
+  const passkeyView = (p: PasskeyRow, current?: string) => ({
+    id: p.id, name: p.name, createdAt: p.created_at, lastUsedAt: p.last_used_at, synced: !!p.backed_up, current: p.id === current,
+  });
+  api.get('/me/passkeys', c => c.json(core.listPasskeys(c.var.user.id).map(p => passkeyView(p))));
+  api.post('/me/passkeys/options', async c => c.json(await webauthn.registrationOptions(c, c.var.user, core.listPasskeys(c.var.user.id))));
+  api.post('/me/passkeys/verify', async c => {
     const body = await readJson(c);
-    guard(c, limits, c.var.user.username);
-    if (typeof body.current !== 'string' || !(await verifyPassword(body.current, c.var.user.password_hash))) {
-      recordFailure(c, limits, c.var.user.username);
-      throw new HTTPException(403, { message: 'Current password is wrong' });
-    }
-    const { password } = checkCredentials(c.var.user.username, body.next);
-    core.setPassword(c.var.user.id, await hashPassword(password));
-    core.deleteOtherSessions(c.var.user.id, c.var.session.id_hash);
+    const reg = await webauthn.verifyRegistration(c, body.flowId, body.response);
+    if (reg.userId !== c.var.user.id) throw new HTTPException(400, { message: 'Passkey request belongs to another session' });
+    const me = c.var.user;
+    const first = core.passkeyCount(me.id) === 0;
+    const codes = core.tx(() => {
+      core.insertPasskey({ ...reg.passkey, user_id: me.id, name: passkeyName(body.name, c) });
+      // The account now has a passkey: drop the password, lift the session's restriction.
+      core.setPassword(me.id, '');
+      core.setSessionScope(c.var.session.id_hash, 'full');
+      return first || core.recoveryCodesLeft(me.id) === 0 ? newRecoveryCodes(me.id) : null;
+    });
+    return c.json({ ok: true, recoveryCodes: codes }, 201);
+  });
+  api.patch('/me/passkeys/:id', async c => {
+    const body = await readJson(c);
+    const name = typeof body.name === 'string' ? body.name.trim().slice(0, 60) : '';
+    if (!name) throw new HTTPException(400, { message: 'Give it a name' });
+    if (!core.renamePasskey(c.var.user.id, c.req.param('id'), name)) throw new HTTPException(404);
     return c.body(null, 204);
   });
+  api.delete('/me/passkeys/:id', c => {
+    if (core.passkeyCount(c.var.user.id) <= 1) throw new HTTPException(409, { message: "Add another passkey first: you can't remove the last one" });
+    if (!core.deletePasskey(c.var.user.id, c.req.param('id'))) throw new HTTPException(404);
+    return c.body(null, 204);
+  });
+
+  /** New set of recovery codes; the old ones stop working. */
+  api.post('/me/recovery-codes', c => c.json({ recoveryCodes: newRecoveryCodes(c.var.user.id) }, 201));
 
   /** Everything UnReSub stores for this user, minus secrets. */
   api.get('/me/export', c => {
@@ -380,16 +495,15 @@ export const createApp = (deps: AppDeps) => {
 
   const deleteUser = (userId: string) => {
     tenants.remove(userId);
-    core.deleteUser(userId); // cascades to sessions, webhook routes and invites
+    core.deleteUser(userId); // cascades to sessions, passkeys, webhook routes and invites
   };
 
-  /** Deletes the account and its whole database. */
+  /** Deleting the account needs a fresh passkey check (get options from /me/confirm). */
+  api.post('/me/confirm', async c => c.json(await webauthn.authenticationOptions(c, c.var.user.id, core.listPasskeys(c.var.user.id))));
   api.delete('/me', async c => {
     const body = await readJson(c);
     const me = c.var.user;
-    if (typeof body.password !== 'string' || !(await verifyPassword(body.password, me.password_hash))) {
-      throw new HTTPException(403, { message: 'Password is wrong' });
-    }
+    await webauthn.verifyAuthentication(c, body.flowId, body.response, id => core.getPasskey(id));
     if (me.is_admin && core.adminCount() === 1 && core.userCount() > 1) {
       throw new HTTPException(409, { message: 'Make someone else an admin first' });
     }
@@ -401,7 +515,7 @@ export const createApp = (deps: AppDeps) => {
   // --- Admin: accounts and sign-up only. Admins can't read other users' data. ---
   const admin = new Hono<AuthEnv>();
   admin.use('*', requireAdmin);
-  admin.get('/users', c => c.json(core.listUsers().map(publicUser)));
+  admin.get('/users', c => c.json(core.listUsers().map(u => ({ ...publicUser(u), passkeys: core.passkeyCount(u.id) }))));
   admin.patch('/users/:id', async c => {
     const body = await readJson(c);
     const target = core.getUser(c.req.param('id'));
@@ -418,6 +532,15 @@ export const createApp = (deps: AppDeps) => {
     if (target.id === c.var.user.id) throw new HTTPException(409, { message: 'Delete your own account from Account settings' });
     deleteUser(target.id);
     return c.body(null, 204);
+  });
+  /** A single-use link, valid 24 hours, that lets someone who lost their passkeys add a new one. */
+  admin.post('/users/:id/reenrol', c => {
+    const target = core.getUser(c.req.param('id'));
+    if (!target) throw new HTTPException(404);
+    const token = randomToken(24);
+    const expiresAt = Math.floor(Date.now() / 1000) + 86_400;
+    core.insertReenrol(sha256(token), target.id, c.var.user.id, expiresAt);
+    return c.json({ token, expiresAt }, 201);
   });
   admin.get('/invites', c => c.json(core.listInvites().map(i => ({ id: i.id, createdAt: i.created_at, expiresAt: i.expires_at, usedAt: i.used_at, usedBy: i.used_by }))));
   admin.post('/invites', c => {

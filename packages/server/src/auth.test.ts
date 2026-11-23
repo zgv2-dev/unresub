@@ -7,15 +7,17 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createApp, type LegacyData } from './app.ts';
 import { Sessions } from './auth.ts';
 import { openCoreDb, type CoreDb } from './core-db.ts';
-import { decryptSecret, encryptSecret } from './crypto.ts';
+import { decryptSecret, encryptSecret, hashPassword } from './crypto.ts';
 import { openDb, type Db } from './db.ts';
 import { loadInstanceKey } from './env.ts';
 import { SyncService } from './sync.ts';
 import { Tenants } from './tenants.ts';
+import { SoftPasskey } from './soft-authenticator.test-util.ts';
+import { androidOrigin, WebAuthn } from './webauthn.ts';
 
 const key = randomBytes(32);
-const PASSWORD = 'correct horse battery';
 const json = { 'Content-Type': 'application/json' };
+const FP = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
 
 let core: CoreDb;
 let tenants: Tenants;
@@ -24,35 +26,66 @@ let app: ReturnType<typeof createApp>;
 const build = (opts: { dataDir?: string | null; legacy?: LegacyData | null } = {}) => {
   core = openCoreDb(opts.dataDir ? join(opts.dataDir, 'core.db') : ':memory:');
   tenants = new Tenants(core, key, { dataDir: opts.dataDir ?? null, publicUrl: 'https://example.test', backfillMonths: 3, log: () => {} });
-  app = createApp({ core, tenants, sessions: new Sessions(core, 30), setupCodes: ['setup-code'], legacy: opts.legacy ?? null, log: () => {} });
+  app = createApp({
+    core, tenants, sessions: new Sessions(core, 30), setupCodes: ['setup-code'], legacy: opts.legacy ?? null, log: () => {},
+    webauthn: new WebAuthn({ publicUrl: null, androidCertFingerprints: [FP] }),
+    android: { package: 'dev.unresub.app', fingerprints: [FP] },
+  });
 };
 
 const post = (path: string, body: object, headers: Record<string, string> = {}) =>
   app.request(path, { method: 'POST', headers: { ...json, ...headers }, body: JSON.stringify(body) });
+const data = async (res: Response | Promise<Response>) => (await res).json() as Promise<any>;
 
 const cookieOf = (res: Response) => res.headers.get('set-cookie')!.split(';')[0]!;
+const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-/** Signs in as an app client and returns bearer headers. */
-const signIn = async (username: string, password = PASSWORD) => {
-  const res = await post('/api/auth/login', { username, password, client: 'app' });
-  expect(res.status).toBe(200);
-  const { token } = (await res.json()) as { token: string };
-  return { Authorization: `Bearer ${token}` };
+/** Creates an account with a fresh software passkey (setup when no account exists yet). */
+interface Registered {
+  status: number;
+  res?: Response;
+  body: any;
+  passkey: SoftPasskey;
+  id: string;
+  headers: Record<string, string>;
+  codes: string[];
+}
+
+const register = async (username: string, extra: Record<string, string> = {}, client = 'app'): Promise<Registered> => {
+  const passkey = new SoftPasskey();
+  const opts = await post('/api/auth/register/options', { username, ...extra });
+  if (opts.status !== 200) return { status: opts.status, body: await opts.json(), passkey, id: '', headers: {}, codes: [] };
+  const { flowId, options } = (await opts.json()) as any;
+  const res = await post('/api/auth/register/verify', { flowId, response: passkey.create(options), client });
+  const body = (await res.json()) as any;
+  return { status: res.status, res, body, passkey, id: body.user?.id as string, headers: bearer(body.token), codes: body.recoveryCodes as string[] };
 };
 
 const setup = async () => {
-  const res = await post('/api/auth/setup', { username: 'admin', password: PASSWORD, setupCode: 'setup-code', client: 'app' });
-  expect(res.status).toBe(201);
-  const { token, user } = (await res.json()) as { token: string; user: { id: string } };
-  return { headers: { Authorization: `Bearer ${token}` }, id: user.id };
+  const r = await register('admin', { setupCode: 'setup-code' });
+  expect(r.status).toBe(201);
+  return r;
 };
 
 const addUser = async (admin: Record<string, string>, username: string) => {
-  const { code } = (await (await post('/api/admin/invites', {}, admin)).json()) as { code: string };
-  const res = await post('/api/auth/signup', { username, password: PASSWORD, invite: code, client: 'app' });
-  expect(res.status).toBe(201);
-  const { token, user } = (await res.json()) as { token: string; user: { id: string } };
-  return { headers: { Authorization: `Bearer ${token}` }, id: user.id };
+  const { code } = await data(post('/api/admin/invites', {}, admin));
+  const r = await register(username, { invite: code });
+  expect(r.status).toBe(201);
+  return r;
+};
+
+const signIn = async (passkey: SoftPasskey) => {
+  const { flowId, options } = await data(post('/api/auth/login/options', {}));
+  const res = await post('/api/auth/login/verify', { flowId, response: passkey.get(options), client: 'app' });
+  return { status: res.status, body: (await res.json()) as any };
+};
+
+/** Adds a passkey to the signed-in account. */
+const addPasskey = async (headers: Record<string, string>, origin?: string) => {
+  const passkey = new SoftPasskey(origin);
+  const { flowId, options } = await data(post('/api/me/passkeys/options', {}, headers));
+  const res = await post('/api/me/passkeys/verify', { flowId, response: passkey.create(options), name: 'Second' }, headers);
+  return { passkey, status: res.status, body: (await res.json()) as any };
 };
 
 /** A source with one account and a monthly Netflix-like series, in the user's own database. */
@@ -67,72 +100,138 @@ const seedBank = (userId: string, sourceId: string, description: string) => {
   return { accountId: `${sourceId}:acc`, txnId: `${sourceId}-${txns[0]!.id}` };
 };
 
-describe('setup and sign-in', () => {
+describe('passkey accounts', () => {
   beforeEach(() => build());
 
-  it('needs the setup code, creates exactly one admin, then refuses to run again', async () => {
-    expect(await (await app.request('/api/auth/status')).json()).toMatchObject({ setupRequired: true, user: null });
-    expect((await post('/api/auth/setup', { username: 'admin', password: PASSWORD, setupCode: 'nope' })).status).toBe(403);
-    const res = await post('/api/auth/setup', { username: 'Admin', password: PASSWORD, setupCode: 'setup-code' });
-    expect(res.status).toBe(201);
-    const cookie = res.headers.get('set-cookie')!;
+  it('sets up the first admin with the setup code and a passkey, once', async () => {
+    expect(await data(app.request('/api/auth/status'))).toMatchObject({ setupRequired: true, user: null });
+    expect((await register('admin', { setupCode: 'nope' })).status).toBe(403);
+    const r = await register('Admin', { setupCode: 'setup-code' }, 'web');
+    expect(r.status).toBe(201);
+    expect(r.codes).toHaveLength(10);
+    const cookie = r.res!.headers.get('set-cookie')!;
     expect(cookie).toMatch(/HttpOnly/i);
     expect(cookie).toMatch(/SameSite=Lax/i);
-    const status = (await (await app.request('/api/auth/status', { headers: { Cookie: cookieOf(res) } })).json()) as any;
-    expect(status).toMatchObject({ setupRequired: false, user: { username: 'admin', isAdmin: true } });
-    expect(status.csrfToken).toBeTruthy();
-    expect((await post('/api/auth/setup', { username: 'evil', password: PASSWORD, setupCode: 'setup-code' })).status).toBe(409);
+    const status = await data(app.request('/api/auth/status', { headers: { Cookie: cookieOf(r.res!) } }));
+    expect(status).toMatchObject({ setupRequired: false, mustEnrol: false, user: { username: 'admin', isAdmin: true } });
+    // Afterwards the same request is just a sign-up, which needs an invite.
+    expect((await register('evil', { setupCode: 'setup-code' })).status).toBe(403);
+    expect(core.getUser(r.id)!.password_hash).toBe('');
   });
 
-  it('rejects weak passwords and non-JSON bodies', async () => {
-    expect((await post('/api/auth/setup', { username: 'admin', password: 'short', setupCode: 'setup-code' })).status).toBe(400);
-    const form = await app.request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'username=a&password=b' });
+  it('signs in with the passkey alone, and rejects unknown passkeys and replays', async () => {
+    const admin = await setup();
+    const ok = await signIn(admin.passkey);
+    expect(ok.status).toBe(200);
+    expect(ok.body.user.username).toBe('admin');
+    expect((await signIn(new SoftPasskey())).status).toBe(401);
+    // A captured assertion can't be reused: the challenge is single use.
+    const { flowId, options } = await data(post('/api/auth/login/options', {}));
+    const response = admin.passkey.get(options);
+    expect((await post('/api/auth/login/verify', { flowId, response })).status).toBe(200);
+    expect((await post('/api/auth/login/verify', { flowId, response })).status).toBe(400);
+  });
+
+  it('rejects bad usernames and non-JSON bodies', async () => {
+    expect((await register('a', { setupCode: 'setup-code' })).status).toBe(400);
+    const form = await app.request('/api/auth/register/options', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'username=a' });
     expect(form.status).toBe(415);
   });
 
-  it('logs in, rate-limits guessing, and never stores the session token', async () => {
-    await setup();
-    for (let i = 0; i < 5; i++) expect((await post('/api/auth/login', { username: 'admin', password: 'wrong password' })).status).toBe(401);
-    const blocked = await post('/api/auth/login', { username: 'admin', password: PASSWORD });
-    expect(blocked.status).toBe(429);
-    expect(blocked.headers.get('retry-after')).toBeTruthy();
-    // Unknown users get the same answer as a wrong password.
-    expect(await (await post('/api/auth/login', { username: 'ghost', password: 'x' })).json()).toEqual({ error: 'Wrong username or password' });
-    const tokens = core.raw.prepare('SELECT id_hash FROM sessions').all() as { id_hash: string }[];
-    expect(tokens.length).toBeGreaterThan(0);
-  });
-
   it('requires the CSRF token for cookie sessions, not for bearer tokens', async () => {
-    const res = await post('/api/auth/setup', { username: 'admin', password: PASSWORD, setupCode: 'setup-code' });
-    const { csrfToken } = (await res.json()) as { csrfToken: string };
-    const Cookie = cookieOf(res);
+    const r = await register('admin', { setupCode: 'setup-code' }, 'web');
+    const Cookie = cookieOf(r.res!);
     const settings = (headers: Record<string, string>) =>
       app.request('/api/admin/settings', { method: 'PUT', headers: { ...json, Cookie, ...headers }, body: JSON.stringify({ signup: 'open' }) });
     expect((await settings({})).status).toBe(403);
     expect((await settings({ 'X-CSRF-Token': 'forged' })).status).toBe(403);
-    expect((await settings({ 'X-CSRF-Token': csrfToken })).status).toBe(200);
+    expect((await settings({ 'X-CSRF-Token': r.body.csrfToken })).status).toBe(200);
     expect((await app.request('/api/subscriptions', { headers: { Cookie } })).status).toBe(200);
   });
 
   it('signs up by invite only, unless the admin opens sign-up', async () => {
     const admin = await setup();
-    expect((await post('/api/auth/signup', { username: 'bob', password: PASSWORD })).status).toBe(403);
-    const { code } = (await (await post('/api/admin/invites', {}, admin.headers)).json()) as { code: string };
-    expect((await post('/api/auth/signup', { username: 'bob', password: PASSWORD, invite: code })).status).toBe(201);
-    expect((await post('/api/auth/signup', { username: 'carol', password: PASSWORD, invite: code })).status).toBe(403);
+    expect((await register('bob')).status).toBe(403);
+    const { code } = await data(post('/api/admin/invites', {}, admin.headers));
+    expect((await register('bob', { invite: code })).status).toBe(201);
+    expect((await register('carol', { invite: code })).status).toBe(403);
     await app.request('/api/admin/settings', { method: 'PUT', headers: { ...json, ...admin.headers }, body: JSON.stringify({ signup: 'open' }) });
-    expect((await post('/api/auth/signup', { username: 'carol', password: PASSWORD })).status).toBe(201);
-    expect((await post('/api/auth/signup', { username: 'CAROL', password: PASSWORD })).status).toBe(409);
+    expect((await register('carol')).status).toBe(201);
+    expect((await register('CAROL')).status).toBe(409);
   });
 
-  it('changing the password signs out other sessions', async () => {
+  it('adds, renames and removes passkeys, but never the last one', async () => {
     const admin = await setup();
-    const other = await signIn('admin');
-    const res = await post('/api/me/password', { current: PASSWORD, next: 'another long password' }, admin.headers);
-    expect(res.status).toBe(204);
-    expect((await app.request('/api/me', { headers: other })).status).toBe(401);
-    expect((await app.request('/api/me', { headers: admin.headers })).status).toBe(200);
-    await signIn('admin', 'another long password');
+    const second = await addPasskey(admin.headers);
+    expect(second.status).toBe(201);
+    expect(second.body.recoveryCodes).toBeNull(); // existing codes stay valid
+    let list = await data(app.request('/api/me/passkeys', { headers: admin.headers }));
+    expect(list.map((p: any) => p.name)).toEqual(['Passkey', 'Second']);
+    const patch = await app.request(`/api/me/passkeys/${list[1].id}`, { method: 'PATCH', headers: { ...json, ...admin.headers }, body: JSON.stringify({ name: 'Phone' }) });
+    expect(patch.status).toBe(204);
+    expect((await app.request(`/api/me/passkeys/${list[0].id}`, { method: 'DELETE', headers: admin.headers })).status).toBe(204);
+    list = await data(app.request('/api/me/passkeys', { headers: admin.headers }));
+    expect(list.map((p: any) => p.name)).toEqual(['Phone']);
+    expect((await app.request(`/api/me/passkeys/${list[0].id}`, { method: 'DELETE', headers: admin.headers })).status).toBe(409);
+    expect((await signIn(admin.passkey)).status).toBe(401);
+    expect((await signIn(second.passkey)).status).toBe(200);
+  });
+
+  it('recovers with a one-time code: only adding a passkey works until one is added', async () => {
+    const admin = await setup();
+    const code = admin.codes[0]!.toUpperCase(); // case and dashes don't matter
+    const rec = await post('/api/auth/recover', { username: 'admin', code, client: 'app' });
+    expect(rec.status).toBe(200);
+    const h = bearer(((await rec.json()) as any).token);
+    expect(await data(app.request('/api/auth/status', { headers: h }))).toMatchObject({ mustEnrol: true });
+    expect((await app.request('/api/subscriptions', { headers: h })).status).toBe(403);
+    expect((await addPasskey(h)).status).toBe(201);
+    expect((await app.request('/api/subscriptions', { headers: h })).status).toBe(200);
+    expect((await post('/api/auth/recover', { username: 'admin', code })).status).toBe(401);
+    expect((await post('/api/auth/recover', { username: 'admin', code: 'nope-nope-nope' })).status).toBe(401);
+  });
+
+  it('lets the admin issue a single-use re-enrol link', async () => {
+    const admin = await setup();
+    const bob = await addUser(admin.headers, 'bob');
+    expect((await post(`/api/admin/users/${admin.id}/reenrol`, {}, bob.headers)).status).toBe(403);
+    const { token } = await data(post(`/api/admin/users/${bob.id}/reenrol`, {}, admin.headers));
+    const res = await post('/api/auth/reenrol', { token, client: 'app' });
+    expect(res.status).toBe(200);
+    const h = bearer(((await res.json()) as any).token);
+    expect((await app.request('/api/sources', { headers: h })).status).toBe(403);
+    const added = await addPasskey(h);
+    expect(added.status).toBe(201);
+    expect((await signIn(added.passkey)).body.user.username).toBe('bob');
+    expect((await post('/api/auth/reenrol', { token })).status).toBe(401);
+  });
+
+  it('moves a password account to a passkey and deletes the password', async () => {
+    await setup();
+    const old = tenants.createUser('olduser', await hashPassword('the old password'), false);
+    const res = await post('/api/auth/login', { username: 'olduser', password: 'the old password', client: 'app' });
+    expect(res.status).toBe(200);
+    const h = bearer(((await res.json()) as any).token);
+    expect((await app.request('/api/subscriptions', { headers: h })).status).toBe(403);
+    const added = await addPasskey(h);
+    expect(added.status).toBe(201);
+    expect(added.body.recoveryCodes).toHaveLength(10);
+    expect(core.getUser(old.id)!.password_hash).toBe('');
+    expect((await app.request('/api/subscriptions', { headers: h })).status).toBe(200);
+    expect((await post('/api/auth/login', { username: 'olduser', password: 'the old password' })).status).toBe(401);
+  });
+
+  it('accepts passkeys from the Android app and publishes assetlinks.json', async () => {
+    const links = await data(app.request('/.well-known/assetlinks.json'));
+    expect(links[0].target).toEqual({ namespace: 'android_app', package_name: 'dev.unresub.app', sha256_cert_fingerprints: [FP] });
+    expect(links[0].relation).toContain('delegate_permission/common.get_login_creds');
+    const admin = await setup();
+    const phone = await addPasskey(admin.headers, androidOrigin(FP));
+    expect(phone.status).toBe(201);
+    expect((await signIn(phone.passkey)).status).toBe(200);
+    // Another app's signature isn't accepted.
+    const other = await addPasskey(admin.headers, androidOrigin(FP.replace('AA', '00')));
+    expect(other.status).toBe(400);
   });
 
   it('logs out', async () => {
@@ -202,6 +301,7 @@ describe('data separation between users', () => {
     expect((await post('/api/admin/invites', {}, bob.headers)).status).toBe(403);
     const users = await get('/api/admin/users', alice.headers);
     expect(users.map((u: any) => u.username)).toEqual(['admin', 'bob']);
+    expect(users.map((u: any) => u.passkeys)).toEqual([1, 1]);
     expect(JSON.stringify(users)).not.toMatch(/password|data_key|scrypt/);
   });
 
@@ -231,14 +331,16 @@ describe('data separation between users', () => {
     expect((await get('/api/sources', alice.headers)).map((s: any) => s.id)).toEqual(['mono-alice']);
   });
 
-  it('lets a user delete their own account with their password', async () => {
-    const del = (password: string) => app.request('/api/me', { method: 'DELETE', headers: { ...json, ...bob.headers }, body: JSON.stringify({ password }) });
-    expect((await del('wrong')).status).toBe(403);
-    expect((await del(PASSWORD)).status).toBe(204);
+  it('deletes your own account only after a fresh passkey check', async () => {
+    const del = async (who: typeof bob, passkey: SoftPasskey) => {
+      const { flowId, options } = await data(post('/api/me/confirm', {}, who.headers));
+      return app.request('/api/me', { method: 'DELETE', headers: { ...json, ...who.headers }, body: JSON.stringify({ flowId, response: passkey.get(options) }) });
+    };
+    expect((await del(bob, alice.passkey)).status).toBe(401); // someone else's passkey doesn't count
+    expect((await del(alice, alice.passkey)).status).toBe(409); // the only admin can't leave others behind
+    expect((await del(bob, bob.passkey)).status).toBe(204);
     expect(core.getUser(bob.id)).toBeUndefined();
-    // The only admin can't leave while others depend on them.
-    const self = await app.request('/api/me', { method: 'DELETE', headers: { ...json, ...alice.headers }, body: JSON.stringify({ password: PASSWORD }) });
-    expect(self.status).toBe(204); // bob is gone, so alice is the last user and may leave
+    expect((await del(alice, alice.passkey)).status).toBe(204);
   });
 });
 

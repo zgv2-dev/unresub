@@ -54,6 +54,17 @@ jobs:
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           echo "path=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
 
+      # The certificate fingerprint is public. Servers need it (UNRESUB_ANDROID_CERT_SHA256) so the app can use passkeys.
+      - name: Show signing certificate fingerprint
+        if: steps.keystore.outputs.path != ''
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          fp=$(keytool -list -v -keystore "$RUNNER_TEMP/release.jks" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" | grep -m1 'SHA256:' | awk '{print $2}')
+          echo "Signing certificate SHA-256: $fp"
+          printf '### App signing certificate\n\nSHA-256: `%s`\n\nSet it on servers as `UNRESUB_ANDROID_CERT_SHA256`.\n' "$fp" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build APKs
         working-directory: packages/mobile/android
         env:
