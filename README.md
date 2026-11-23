@@ -42,8 +42,8 @@ One-time setup:
    Railway sees the pnpm workspace and offers **four services** (`@unresub/web`, `@unresub/core`, `@unresub/server`, `@unresub/mobile`). You need **only one**: the server image already contains the web UI, `core` is a library, and `mobile` is built by GitHub Actions. Before pressing **Deploy**:
    - Delete `@unresub/web`, `@unresub/core` and `@unresub/mobile`: tap each → **Settings** → bottom of the page → **Delete service**.
    - Open `@unresub/server` → **Settings** and fix what Railway pre-filled for the package folder:
-     - **Source → Root Directory**: empty (repo root), not `packages/server`. That's what makes it pick up the root `Dockerfile` and `railway.json`.
-     - **Build → Builder**: `Dockerfile` (`railway.json` sets this too). Clear any custom build or start command.
+     - **Source → Root Directory**: empty (repo root), not `packages/server`, if your Railway shows this field. Some accounts don't show it; then the next setting is enough.
+     - **Build → Builder**: `Dockerfile`, **Dockerfile path** `/Dockerfile` (`railway.json` sets these too). Clear any custom build or start command.
      - **Watch Paths**: empty (`railway.json` provides them).
      - Optional: rename the service to `unresub`.
    - Do steps 3 and 4 below, then press **Deploy**.
@@ -58,6 +58,7 @@ One-time setup:
 
    Railway may suggest variables from `.env.example`; accept the two secrets and skip the rest.
 5. **Get a public address.** Service → **Settings** → **Networking** → **Generate Domain**, target port `8787`. You get something like `https://unresub-production.up.railway.app`.
+   Own domain instead: **Networking** → **Custom Domain** → e.g. `unresub.example.com`, port `8787`, then add the CNAME record Railway shows at your DNS provider. Railway issues the https certificate once DNS resolves.
 6. **Turn on webhooks.** Add the variable `PUBLIC_URL` = that https address. Railway redeploys. The deploy is healthy when **Deployments** shows it as active; `https://<your address>/healthz` answers `ok`.
 7. **Use it.** Open the address, enter `UNRESUB_API_TOKEN`, then connect monobank with a token from https://api.monobank.ua.
 8. **Point the Android app at it.** GitHub repo → Settings → Secrets and variables → Actions → **Variables** → `UNRESUB_API_URL` = the same https address. Then Actions → Android → **Run workflow** to build an APK that talks to your server.
