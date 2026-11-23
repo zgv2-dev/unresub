@@ -263,4 +263,55 @@ describe('server', () => {
       migrated.close();
     });
   });
+
+  describe('transactions and manual subscriptions', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const get = async (path: string) => (await (await app.request(path, { headers: auth })).json()) as any;
+    const post = (path: string, body: object) =>
+      app.request(path, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const insert = (id: string, series: ReturnType<typeof makeSeries>) =>
+      db.insertTransactions(`${id}:acc`, series.map(({ accountId: _, ...t }) => ({ ...t, accountExternalId: 'acc', raw: null })));
+
+    it('lists with filters and marks which subscription a charge belongs to', async () => {
+      const id = seedSource(db);
+      insert(id, makeSeries({ description: 'ANTHROPIC', period: 'monthly', price: 2_000, currency: 840, rate: 41, count: 3, last: now - 5 * 86_400 }));
+      insert(id, makeSeries({ description: 'Silpo', period: 'weekly', price: 50_000, currency: 980, count: 1, last: now - 86_400, mcc: 5411 }));
+      let body = await get('/api/transactions?debit=1');
+      expect(body.total).toBe(4);
+      expect(body.items[0]).toMatchObject({ description: 'Silpo', subscriptionKey: null });
+      expect(body.items[1]).toMatchObject({ description: 'ANTHROPIC', subscriptionName: 'Anthropic (Claude)', hidden: false });
+      body = await get('/api/transactions?q=silp');
+      expect(body.items.map((t: any) => t.description)).toEqual(['Silpo']);
+      body = await get('/api/transactions?unassigned=1&min=40000');
+      expect(body.items.map((t: any) => t.description)).toEqual(['Silpo']);
+    });
+
+    it('creates a subscription from one transaction that picks up future charges', async () => {
+      const id = seedSource(db);
+      const first = makeSeries({ description: 'SPORTLIFE 0042', period: 'monthly', price: 90_000, currency: 980, count: 1, last: now - 10 * 86_400, mcc: 7997 });
+      const older = makeSeries({ description: 'SPORTLIFE 0042', period: 'monthly', price: 90_000, currency: 980, count: 1, last: now - 80 * 86_400, mcc: 7997 }); // skipped month: too irregular to detect
+      insert(id, [...first, ...older]);
+      expect((await get('/api/subscriptions')).items).toHaveLength(0);
+
+      const similar = await get(`/api/transactions/${encodeURIComponent(first[0]!.id)}/similar`);
+      expect(similar.items).toMatchObject([{ id: older[0]!.id, sameAmount: true }]);
+      expect(similar.suggested.name).toBe('SPORTLIFE');
+
+      const res = await post('/api/manual-subscriptions', { transactionId: first[0]!.id, name: 'Gym', period: 'monthly', attachIds: [older[0]!.id] });
+      expect(res.status).toBe(201);
+      const { key } = (await res.json()) as any;
+      let subs = (await get('/api/subscriptions')).items;
+      expect(subs).toMatchObject([{ key, name: 'Gym', manual: true, chargeCount: 2, price: 90_000 }]);
+
+      // A new charge from the same gym lands in it automatically.
+      insert(id, makeSeries({ description: 'SPORTLIFE 0077', period: 'monthly', price: 90_000, currency: 980, count: 1, last: now - 86_400, mcc: 7997 }));
+      subs = (await get('/api/subscriptions')).items;
+      expect(subs).toMatchObject([{ key, chargeCount: 3 }]);
+      const txns = await get('/api/transactions');
+      expect(txns.items.every((t: any) => t.subscriptionKey === key)).toBe(true);
+
+      await app.request(`/api/manual-subscriptions/${encodeURIComponent(key)}`, { method: 'DELETE', headers: auth });
+      expect((await get('/api/subscriptions')).items.some((i: any) => i.key === key)).toBe(false);
+    });
+  });
 });

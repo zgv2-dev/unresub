@@ -5,6 +5,10 @@ import { HTTPException } from 'hono/http-exception';
 import {
   annualEquivalent,
   applyCorrections,
+  buildManualSubscriptions,
+  groupKeyOf,
+  matchService,
+  merchantKey,
   computeAlerts,
   detectSubscriptions,
   monthlyEquivalent,
@@ -12,7 +16,7 @@ import {
   serviceById,
   type Period,
 } from '@unresub/core';
-import { safeEqual } from './crypto.ts';
+import { randomToken, safeEqual } from './crypto.ts';
 import type { Db, OverrideRow } from './db.ts';
 import { MonobankError } from './sources/monobank.ts';
 import type { SyncService } from './sync.ts';
@@ -24,7 +28,13 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
   const hasSubCard = [...accounts.values()].some(a => a.is_subscription_card);
   const overrides = new Map(db.listOverrides().map(o => [o.key, o]));
   const splitGroups = db.splitGroups();
-  const raw = detectSubscriptions(db.listTransactions(), { now, toLocal: sync.toLocal, splitGroups });
+  const transactions = db.listTransactions();
+  // Manual subscriptions claim their transactions first, so detection doesn't count them twice.
+  const manual = buildManualSubscriptions(db.listManual(), transactions, { now, toLocal: sync.toLocal });
+  const raw = [
+    ...manual.subscriptions,
+    ...detectSubscriptions(transactions.filter(t => !manual.claimed.has(t.id)), { now, toLocal: sync.toLocal, splitGroups }),
+  ];
   const nameOf = new Map(raw.map(r => [r.key, overrides.get(r.key)?.name ?? serviceById(r.serviceId)?.name ?? r.name]));
   const detected = applyCorrections(
     raw,
@@ -33,6 +43,7 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
   );
 
   const items = detected.map(d => {
+    const isManual = d.key.startsWith('manual:');
     const o: Partial<OverrideRow> = overrides.get(d.key) ?? {};
     const serviceId = o.service_id ?? d.serviceId;
     const service = serviceById(serviceId);
@@ -41,7 +52,8 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
     return {
       ...d,
       serviceId,
-      name: o.name ?? service?.name ?? d.name,
+      name: o.name ?? (isManual ? d.name : service?.name ?? d.name),
+      manual: isManual,
       detectedName: d.name,
       period,
       category: service?.category ?? null,
@@ -58,9 +70,9 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
       /** Series folded into this one; PATCH their key with mergedInto: null to undo. */
       merged: d.mergedKeys.map(k => ({ key: k, name: nameOf.get(k) ?? k })),
       /** This merchant could be split into separate subscriptions by price. */
-      canSplit: d.key === d.groupKey,
+      canSplit: !isManual && d.key === d.groupKey,
       /** This row came from a split; "undo split" goes through groupKey. */
-      isSplit: splitGroups.has(d.groupKey),
+      isSplit: !isManual && splitGroups.has(d.groupKey),
       needsDetails: !serviceId && !o.name,
       account: account
         ? { id: account.id, maskedPan: account.masked_pan, type: account.type, isSubscriptionCard: !!account.is_subscription_card }
@@ -242,6 +254,99 @@ export const createApp = (db: Db, sync: SyncService, apiToken: string) => {
       remind_days: pick(body.remindDays, prev?.remind_days),
       merged_into: pick(body.mergedInto, prev?.merged_into),
     });
+    return c.body(null, 204);
+  });
+
+  // --- Transactions ---
+  const txnView = (now = Math.floor(Date.now() / 1000)) => {
+    const view = buildSubscriptionsView(db, sync, now);
+    const owner = new Map<string, { key: string; name: string; hidden: boolean }>();
+    for (const i of view.items) for (const id of i.transactionIds) owner.set(id, { key: i.key, name: i.name, hidden: i.userStatus === 'ignored' });
+    return { owner, view };
+  };
+  const toRow = (t: ReturnType<Db['listTransactions']>[number], owner: Map<string, { key: string; name: string; hidden: boolean }>) => {
+    const o = owner.get(t.id);
+    return {
+      ...t,
+      subscriptionKey: o?.key ?? null,
+      subscriptionName: o?.name ?? null,
+      hidden: o?.hidden ?? false,
+    };
+  };
+
+  /** Filters: q (description), account, from/to (unix s), min/max (abs amount in account currency, minor), debit=1, unassigned=1. */
+  api.get('/transactions', c => {
+    const p = c.req.query();
+    const num = (v?: string) => (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+    const [from, to, min, max] = [num(p.from), num(p.to), num(p.min), num(p.max)];
+    const limit = Math.min(500, num(p.limit) ?? 100);
+    const offset = num(p.offset) ?? 0;
+    const q = p.q?.trim().toLowerCase();
+    const { owner } = txnView();
+    const rows = db
+      .listTransactions(from ?? 0)
+      .filter(t =>
+        (to == null || t.time <= to) &&
+        (!p.account || t.accountId === p.account) &&
+        (p.debit !== '1' || t.amount < 0) &&
+        (min == null || Math.abs(t.amount) >= min) &&
+        (max == null || Math.abs(t.amount) <= max) &&
+        (!q || t.description.toLowerCase().includes(q) || (t.counterName ?? '').toLowerCase().includes(q)) &&
+        (p.unassigned !== '1' || !owner.has(t.id)),
+      )
+      .reverse();
+    return c.json({ total: rows.length, items: rows.slice(offset, offset + limit).map(t => toRow(t, owner)) });
+  });
+
+  /** Other debits from the same merchant, to attach when creating a subscription by hand. */
+  api.get('/transactions/:id/similar', c => {
+    const all = db.listTransactions();
+    const t = all.find(x => x.id === c.req.param('id'));
+    if (!t) throw new HTTPException(404);
+    const groupKey = groupKeyOf(t);
+    const { owner } = txnView();
+    const amount = Math.abs(t.operationAmount);
+    const items = all
+      .filter(x => x.id !== t.id && x.operationAmount < 0 && groupKey && groupKeyOf(x) === groupKey)
+      .reverse()
+      .slice(0, 50)
+      .map(x => ({ ...toRow(x, owner), sameAmount: Math.abs(Math.abs(x.operationAmount) - amount) <= amount * 0.03 }));
+    const service = matchService(t.description);
+    const cleaned = t.description.replace(/\s*[#№]?\d{3,}\S*/g, '').trim() || t.description;
+    return c.json({
+      transaction: toRow(t, owner),
+      groupKey,
+      merchant: merchantKey(t.description),
+      suggested: { name: service?.name ?? t.counterName ?? cleaned, serviceId: service?.id ?? null },
+      items,
+    });
+  });
+
+  api.post('/manual-subscriptions', async c => {
+    const body = await c.req.json<{ transactionId: string; name?: string; serviceId?: string | null; period: Period; matchAmount?: boolean; attachIds?: string[] }>();
+    const t = db.listTransactions().find(x => x.id === body.transactionId);
+    if (!t) throw new HTTPException(404, { message: 'Transaction not found' });
+    if (t.operationAmount >= 0) throw new HTTPException(400, { message: 'Only charges can be subscriptions' });
+    if (!PERIODS.includes(body.period)) throw new HTTPException(400, { message: 'Bad period' });
+    if (body.serviceId && !serviceById(body.serviceId)) throw new HTTPException(400, { message: 'Unknown service' });
+    const groupKey = groupKeyOf(t);
+    const key = `manual:${randomToken(6)}`;
+    const ids = [...new Set([t.id, ...(body.attachIds ?? [])])].slice(0, 500);
+    db.insertManual({
+      key,
+      groupKey: groupKey || `txn:${t.id}`, // no usable merchant: only the attached charges count
+      matchAmount: body.matchAmount === false ? null : Math.abs(t.operationAmount),
+      period: body.period,
+      name: body.name?.trim() || serviceById(body.serviceId)?.name || t.description,
+      serviceId: body.serviceId ?? null,
+      transactionIds: ids,
+    });
+    return c.json({ key }, 201);
+  });
+
+  api.delete('/manual-subscriptions/:key', c => {
+    if (!c.req.param('key').startsWith('manual:')) throw new HTTPException(400, { message: 'Not a manual subscription' });
+    db.deleteManual(c.req.param('key'));
     return c.body(null, 204);
   });
 

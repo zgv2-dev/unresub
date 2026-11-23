@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import type { Period, Transaction } from '@unresub/core';
+import type { ManualSubscription, Period, Transaction } from '@unresub/core';
 import type { SourceAccount, SourceKind, SourceTransaction } from './sources/types.ts';
 
 const SCHEMA = /* sql */ `
@@ -56,6 +56,18 @@ CREATE TABLE IF NOT EXISTS rate_snapshots (
   rate_sell  REAL,
   rate_cross REAL,
   PRIMARY KEY (fetched_at, currency)
+);
+
+-- Subscriptions the user created from a transaction detection missed (see core/manual.ts).
+CREATE TABLE IF NOT EXISTS manual_subscriptions (
+  key          TEXT PRIMARY KEY,   -- 'manual:<id>'
+  group_key    TEXT NOT NULL,      -- merchant group; future debits in it are picked up
+  match_amount INTEGER,            -- NULL = any amount
+  period       TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  service_id   TEXT,
+  txn_ids      TEXT NOT NULL,      -- JSON array of attached transaction ids
+  created_at   INTEGER NOT NULL
 );
 
 -- Merchant groups the user split into separate subscriptions by price.
@@ -162,6 +174,12 @@ export const openDb = (path: string) => {
       ON CONFLICT (key) DO UPDATE SET
         name = excluded.name, service_id = excluded.service_id, period = excluded.period, status = excluded.status,
         cancel_url = excluded.cancel_url, notes = excluded.notes, remind_days = excluded.remind_days, merged_into = excluded.merged_into, updated_at = excluded.updated_at`),
+    manuals: db.prepare('SELECT * FROM manual_subscriptions ORDER BY created_at'),
+    insertManual: db.prepare(
+      'INSERT INTO manual_subscriptions (key, group_key, match_amount, period, name, service_id, txn_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ),
+    deleteManual: db.prepare('DELETE FROM manual_subscriptions WHERE key = ?'),
+    txn: db.prepare('SELECT id FROM transactions WHERE id = ?'),
     splitGroups: db.prepare('SELECT group_key FROM split_groups'),
     addSplit: db.prepare('INSERT OR IGNORE INTO split_groups (group_key, created_at) VALUES (?, ?)'),
     removeSplit: db.prepare('DELETE FROM split_groups WHERE group_key = ?'),
@@ -234,6 +252,14 @@ export const openDb = (path: string) => {
     listOverrides: () => q.overrides.all() as unknown as OverrideRow[],
     upsertOverride: (o: Omit<OverrideRow, 'updated_at'>) =>
       void q.upsertOverride.run(o.key, o.name, o.service_id, o.period, o.status, o.cancel_url, o.notes, o.remind_days, o.merged_into, now()),
+    listManual: (): ManualSubscription[] =>
+      (q.manuals.all() as Record<string, any>[]).map(r => ({
+        key: r.key, groupKey: r.group_key, matchAmount: r.match_amount, period: r.period, name: r.name,
+        serviceId: r.service_id, transactionIds: JSON.parse(r.txn_ids),
+      })),
+    insertManual: (m: ManualSubscription) =>
+      void q.insertManual.run(m.key, m.groupKey, m.matchAmount, m.period, m.name, m.serviceId, JSON.stringify(m.transactionIds), now()),
+    deleteManual: (key: string) => void q.deleteManual.run(key),
     splitGroups: () => new Set((q.splitGroups.all() as { group_key: string }[]).map(r => r.group_key)),
     setSplit: (groupKey: string, split: boolean) => void (split ? q.addSplit.run(groupKey, now()) : q.removeSplit.run(groupKey)),
   };

@@ -4,3 +4,4 @@ export * from './catalog.ts';
 export * from './detect.ts';
 export * from './alerts.ts';
 export * from './corrections.ts';
+export * from './manual.ts';

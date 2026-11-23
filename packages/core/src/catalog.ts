@@ -88,3 +88,13 @@ export const matchService = (description: string, catalog = SERVICE_CATALOG) => 
 
 export const serviceById = (id: string | null | undefined, catalog = SERVICE_CATALOG) =>
   id ? catalog.find(s => s.id === id) ?? null : null;
+
+/**
+ * Merchant group a debit belongs to: the known service, or the normalised merchant name, plus the charged
+ * currency. Empty when the description has nothing usable. Shared by detection and manual subscriptions.
+ */
+export const groupKeyOf = (t: { description: string; operationCurrency: number }, catalog = SERVICE_CATALOG) => {
+  const service = matchService(t.description, catalog);
+  const base = service ? `svc:${service.id}` : `m:${merchantKey(t.description)}`;
+  return base === 'm:' ? '' : `${base}|${t.operationCurrency}`;
+};

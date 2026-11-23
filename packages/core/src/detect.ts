@@ -1,4 +1,4 @@
-import { matchService, merchantKey, SUBSCRIPTION_MCCS, SERVICE_CATALOG } from './catalog.ts';
+import { groupKeyOf, matchService, SUBSCRIPTION_MCCS, SERVICE_CATALOG } from './catalog.ts';
 import { addPeriod, PERIOD_DAYS, toMajor } from './money.ts';
 import {
   LOCAL_CURRENCY,
@@ -67,7 +67,7 @@ const clusterByAmount = (txns: Transaction[], tolerance: number) => {
   return clusters;
 };
 
-const localAmountOf = (t: Transaction, toLocal: DetectOptions['toLocal']) =>
+export const localAmountOf = (t: Transaction, toLocal: DetectOptions['toLocal']) =>
   t.accountCurrency === LOCAL_CURRENCY
     ? Math.abs(t.amount)
     : t.operationCurrency === LOCAL_CURRENCY
@@ -108,10 +108,9 @@ export const detectSubscriptions = (transactions: Transaction[], opts: DetectOpt
 
   const groups = new Map<string, { service: ServiceDefinition | null; txns: Transaction[] }>();
   for (const t of debits) {
+    const key = groupKeyOf(t, catalog);
+    if (!key) continue;
     const service = matchService(t.description, catalog);
-    const base = service ? `svc:${service.id}` : `m:${merchantKey(t.description)}`;
-    if (base === 'm:') continue;
-    const key = `${base}|${t.operationCurrency}`;
     const g = groups.get(key) ?? { service, txns: [] };
     g.txns.push(t);
     groups.set(key, g);
