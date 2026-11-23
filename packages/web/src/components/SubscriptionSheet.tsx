@@ -108,6 +108,7 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
           <span>Card</span>
           <strong>{s.account?.maskedPan ? `•••• ${s.account.maskedPan.slice(-4)}` : '—'}</strong>
           <em>{s.account?.isSubscriptionCard ? 'Subscriptions card' : s.onMainCard ? 'Main card · move to the subscriptions card' : s.account?.type ?? ''}</em>
+          {s.movedFrom && <em>Moved from ••{s.movedFrom.maskedPan?.slice(-4) ?? '?'}</em>}
         </div>
         <div>
           <span>Per month</span>
