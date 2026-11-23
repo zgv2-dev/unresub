@@ -16,6 +16,7 @@ import { SubscriptionSheet } from './components/SubscriptionSheet.tsx';
 import { SyncProgress } from './components/SyncProgress.tsx';
 import { TransactionSheet } from './components/TransactionSheet.tsx';
 import { TransactionsTab } from './components/TransactionsTab.tsx';
+import { Toast } from './components/Toast.tsx';
 
 type Tab = 'subs' | 'tx' | 'cards';
 
@@ -112,15 +113,29 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
     setData(d => d && { ...d, items: d.items.map(i => (i.key === s.key ? { ...i, userStatus: 'ignored' } : i)) });
     try {
       await api.hide(s.key);
-      setToast({ text: `${s.name} hidden`, undo: () => api.hide(s.key, false) });
+      setToast({ text: `${s.name} moved to transactions`, undo: () => api.hide(s.key, false) });
     } catch (e) {
       setError((e as Error).message);
     }
     void load();
   };
+  /** Archive (cancelled or ended) with undo. A new charge brings it back on its own. */
+  const archive = async (s: SubscriptionItem) => {
+    setOpenKey(null);
+    setData(d => d && { ...d, items: d.items.map(i => (i.key === s.key ? { ...i, lifecycle: 'archived', archivedBy: 'user' } : i)) });
+    try {
+      await api.archive(s.key);
+      setToast({ text: `${s.name} archived`, undo: () => api.archive(s.key, false) });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    void load();
+  };
+  /** Back to the list: un-hide a hidden one, un-archive an archived one. */
   const restore = async (s: SubscriptionItem) => {
-    await api.hide(s.key, false).catch(e => setError((e as Error).message));
-    setToast({ text: `${s.name} restored`, undo: () => api.hide(s.key) });
+    const hidden = s.lifecycle === 'hidden';
+    await (hidden ? api.hide(s.key, false) : api.archive(s.key, false)).catch(e => setError((e as Error).message));
+    setToast({ text: `${s.name} restored`, undo: () => (hidden ? api.hide(s.key) : api.archive(s.key)) });
     void load();
   };
 
@@ -132,9 +147,9 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
   const subsContent = !data ? (
     <Skeleton />
   ) : desktop ? (
-    <SubscriptionsTable data={data} sources={sources} onOpen={setOpenKey} onOpenCards={() => setTab('cards')} onHide={hide} onRestore={restore} />
+    <SubscriptionsTable data={data} sources={sources} onOpen={setOpenKey} onOpenCards={() => setTab('cards')} onHide={hide} onArchive={archive} onRestore={restore} />
   ) : (
-    <SubscriptionsTab data={data} sources={sources} syncing={syncing} onOpen={setOpenKey} onOpenCards={() => setTab('cards')} onHide={hide} onRestore={restore} />
+    <SubscriptionsTab data={data} sources={sources} syncing={syncing} onOpen={setOpenKey} onOpenCards={() => setTab('cards')} onHide={hide} onArchive={archive} onRestore={restore} />
   );
   const content =
     tab === 'subs' ? subsContent
@@ -254,6 +269,8 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
           onHide={() => void hide(open)}
           onRefresh={() => (setTxVersion(v => v + 1), void load())}
           onOpenTransaction={id => void api.similar(id).then(r => (setOpenKey(null), setTab('tx'), setTxn(r.transaction)), e => setError((e as Error).message))}
+          onArchive={() => void archive(open)}
+          onRestore={() => (setOpenKey(null), void restore(open))}
         />
       )}
 
@@ -271,10 +288,12 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
       {accountOpen && <AccountSheet user={user} onClose={() => setAccountOpen(false)} onLogout={onLogout} />}
 
       {toast && (
-        <div className="toast" role="status">
-          <span>{toast.text}</span>
-          <button onClick={() => { const t = toast; setToast(null); void t.undo().then(load); }}>Undo</button>
-        </div>
+        <Toast
+          key={toast.text}
+          text={toast.text}
+          onUndo={() => { const t = toast; setToast(null); void t.undo().then(load); }}
+          onDismiss={() => setToast(null)}
+        />
       )}
     </div>
   );
@@ -286,23 +305,56 @@ type SubsProps = {
   onOpen: (key: string) => void;
   onOpenCards: () => void;
   onHide: (s: SubscriptionItem) => void;
+  onArchive: (s: SubscriptionItem) => void;
   onRestore: (s: SubscriptionItem) => void;
 };
 
-const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide, onRestore }: SubsProps & { data: SubscriptionsResponse }) => {
-  const [showHidden, setShowHidden] = useState(false);
+type SubsView = 'active' | 'inactive' | 'archived';
 
-  const hidden = data.items.filter(i => i.userStatus === 'ignored');
-  const items = data.items.filter(i => i.userStatus !== 'ignored');
-  const live = items.filter(i => i.status !== 'possibly_cancelled').sort((a, b) => a.nextChargeAt - b.nextChargeAt);
-  const groups: [string, SubscriptionItem[]][] = [
-    ['Next 7 days', live.filter(i => daysUntil(i.nextChargeAt) <= 7)],
-    ['This month', live.filter(i => daysUntil(i.nextChargeAt) > 7 && daysUntil(i.nextChargeAt) <= 31)],
-    ['Later', live.filter(i => daysUntil(i.nextChargeAt) > 31)],
-    ['Possibly cancelled', items.filter(i => i.status === 'possibly_cancelled')],
-  ];
+const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide, onArchive, onRestore }: SubsProps & { data: SubscriptionsResponse }) => {
+  const [view, setView] = useState<SubsView>('active');
+  useEffect(() => {
+    scrollTo({ top: 0 });
+  }, [view]);
+
+  const by = (l: SubscriptionItem['lifecycle']) => data.items.filter(i => i.lifecycle === l);
+  const active = by('active').sort((a, b) => a.nextChargeAt - b.nextChargeAt);
+  const inactive = by('inactive').sort((a, b) => b.lastChargeAt - a.lastChargeAt);
+  const archived = by('archived').sort((a, b) => b.lastChargeAt - a.lastChargeAt);
   const lowKeys = new Set(data.alerts.flatMap(a => (a.type === 'low_balance' ? [a.key] : [])));
   const running = sources.find(s => s.sync.running);
+
+  // Archived and Hidden live on their own screen, off the main list.
+  if (view === 'archived') {
+    const list = archived;
+    return (
+      <>
+        <div className="subpage-head">
+          <button className="icon-btn" onClick={() => setView('active')} aria-label="Back"><Icon name="chevronLeft" /></button>
+          <h1 className="page-title">Archived</h1>
+        </div>
+        <p className="small muted" style={{ margin: '0 4px 14px' }}>
+          Cancelled or ended subscriptions. Ones that stay silent for two billing periods land here on their own. A new charge brings a subscription back.
+        </p>
+        {list.length ? (
+          <ul className="list card dim-soft">
+            {list.map(s => <SubscriptionRow key={s.key} s={s} lowBalance={false} onOpen={() => onOpen(s.key)} onRestore={() => onRestore(s)} />)}
+          </ul>
+        ) : (
+          <div className="card empty small">Nothing here.</div>
+        )}
+      </>
+    );
+  }
+
+  const groups: [string, SubscriptionItem[]][] =
+    view === 'active'
+      ? [
+          ['Next 7 days', active.filter(i => daysUntil(i.nextChargeAt) <= 7)],
+          ['This month', active.filter(i => daysUntil(i.nextChargeAt) > 7 && daysUntil(i.nextChargeAt) <= 31)],
+          ['Later', active.filter(i => daysUntil(i.nextChargeAt) > 31)],
+        ]
+      : [['No charge when expected', inactive]];
 
   return (
     <>
@@ -312,9 +364,17 @@ const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide,
           <SyncProgress src={running} compact />
         </section>
       )}
-      <Summary totals={data.totals} items={live.filter(i => i.userStatus !== 'ignored')} />
+      <Summary totals={data.totals} items={active} />
 
-      {!live.length && (
+      <div className="seg seg-wide" role="tablist" style={{ marginTop: 20 }}>
+        {([['active', 'Active', active.length], ['inactive', 'Inactive', inactive.length]] as const).map(([v, label, n]) => (
+          <button key={v} role="tab" aria-pressed={view === v} aria-selected={view === v} onClick={() => setView(v)}>
+            {label} <span className="faint num">{n}</span>
+          </button>
+        ))}
+      </div>
+
+      {view === 'active' && !active.length && (
         <div className="card empty section">
           <span className="svc"><Icon name={syncing ? 'clock' : 'sparkle'} /></span>
           <strong style={{ color: 'var(--text)' }}>{syncing ? 'Looking through your history…' : sources.length ? 'No subscriptions found yet' : 'Connect monobank to start'}</strong>
@@ -322,42 +382,38 @@ const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide,
           {!sources.length && <button className="btn sm" onClick={onOpenCards}>Connect</button>}
         </div>
       )}
-
-      {groups.filter(([, list]) => list.length).map(([title, list]) => {
-        const total = list.reduce((s, i) => s + i.localPrice, 0);
-        const stale = title === 'Possibly cancelled';
-        return (
-          <section key={title} className="section">
-            <div className="section-head">
-              <h2>{title}</h2>
-              {!stale && <span className="sum num">{formatMoney(total, LOCAL_CURRENCY)}</span>}
-            </div>
-            <ul className={`list card ${stale ? 'dim' : ''}`}>
-              {list.map(s => <SubscriptionRow key={s.key} s={s} lowBalance={lowKeys.has(s.key)} onOpen={() => onOpen(s.key)} onHide={() => onHide(s)} />)}
-            </ul>
-          </section>
-        );
-      })}
-
-      {!!hidden.length && (
-        <section className="section">
-          <div className="section-head">
-            <h2>
-              <button className="btn ghost sm" onClick={() => setShowHidden(v => !v)} aria-expanded={showHidden}>
-                Hidden ({hidden.length}) <Icon name="chevron" size={16} style={{ transform: showHidden ? 'rotate(90deg)' : undefined }} />
-              </button>
-            </h2>
-          </div>
-          {showHidden && (
-            <>
-              <p className="xs faint" style={{ margin: '0 4px 8px' }}>Marked as not a subscription. New charges from the same merchant stay here.</p>
-              <ul className="list card dim">
-                {hidden.map(s => <SubscriptionRow key={s.key} s={s} lowBalance={false} onOpen={() => onOpen(s.key)} onRestore={() => onRestore(s)} />)}
-              </ul>
-            </>
-          )}
-        </section>
+      {view === 'inactive' && (
+        <p className="small muted" style={{ margin: '14px 4px 0' }}>
+          {inactive.length ? 'The expected charge never came. If you cancelled one, archive it.' : 'Nothing inactive. Every subscription charged when expected.'}
+        </p>
       )}
+
+      {groups.filter(([, list]) => list.length).map(([title, list]) => (
+        <section key={title} className="section" style={{ marginTop: 18 }}>
+          <div className="section-head">
+            <h2>{title}</h2>
+            {view === 'active' && <span className="sum num">{formatMoney(list.reduce((s, i) => s + i.localPrice, 0), LOCAL_CURRENCY)}</span>}
+          </div>
+          <ul className="list card">
+            {list.map(s =>
+              view === 'active' ? (
+                <SubscriptionRow key={s.key} s={s} lowBalance={lowKeys.has(s.key)} onOpen={() => onOpen(s.key)} onHide={() => onHide(s)} />
+              ) : (
+                <SubscriptionRow key={s.key} s={s} lowBalance={false} onOpen={() => onOpen(s.key)} onArchive={() => onArchive(s)} />
+              ),
+            )}
+          </ul>
+        </section>
+      ))}
+
+      <div className="link-rows card section">
+        <button onClick={() => setView('archived')}>
+          <span className="side-ico"><Icon name="archive" size={16} /></span>
+          Archived
+          <span className="faint num">{archived.length}</span>
+          <Icon name="chevron" size={16} className="faint" />
+        </button>
+      </div>
     </>
   );
 };

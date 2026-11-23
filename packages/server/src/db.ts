@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS subscription_overrides (
   notes       TEXT,
   remind_days INTEGER,          -- reminder lead time, for later notifications
   merged_into TEXT,             -- fold this series into another key
+  archived_at INTEGER,          -- archived by the user at this time; a newer charge brings it back
   updated_at  INTEGER NOT NULL
 );
 `;
@@ -133,6 +134,7 @@ export interface OverrideRow {
   notes: string | null;
   remind_days: number | null;
   merged_into: string | null;
+  archived_at: number | null;
   updated_at: number;
 }
 
@@ -144,6 +146,7 @@ export const openDb = (path: string) => {
   // Migrations for databases created before a column existed.
   const cols = (table: string) => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name));
   if (!cols('subscription_overrides').has('merged_into')) db.exec('ALTER TABLE subscription_overrides ADD COLUMN merged_into TEXT');
+  if (!cols('subscription_overrides').has('archived_at')) db.exec('ALTER TABLE subscription_overrides ADD COLUMN archived_at INTEGER');
 
   const q = {
     insertSource: db.prepare(
@@ -177,11 +180,12 @@ export const openDb = (path: string) => {
     rateNear: db.prepare('SELECT * FROM rate_snapshots WHERE currency = ? ORDER BY ABS(fetched_at - ?) LIMIT 1'),
     overrides: db.prepare('SELECT * FROM subscription_overrides'),
     upsertOverride: db.prepare(`
-      INSERT INTO subscription_overrides (key, name, service_id, period, status, cancel_url, notes, remind_days, merged_into, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO subscription_overrides (key, name, service_id, period, status, cancel_url, notes, remind_days, merged_into, archived_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (key) DO UPDATE SET
         name = excluded.name, service_id = excluded.service_id, period = excluded.period, status = excluded.status,
-        cancel_url = excluded.cancel_url, notes = excluded.notes, remind_days = excluded.remind_days, merged_into = excluded.merged_into, updated_at = excluded.updated_at`),
+        cancel_url = excluded.cancel_url, notes = excluded.notes, remind_days = excluded.remind_days, merged_into = excluded.merged_into,
+        archived_at = excluded.archived_at, updated_at = excluded.updated_at`),
     manuals: db.prepare('SELECT * FROM manual_subscriptions ORDER BY created_at'),
     insertManual: db.prepare(
       'INSERT INTO manual_subscriptions (key, group_key, match_amount, period, name, service_id, txn_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -263,8 +267,8 @@ export const openDb = (path: string) => {
         | undefined,
 
     listOverrides: () => q.overrides.all() as unknown as OverrideRow[],
-    upsertOverride: (o: Omit<OverrideRow, 'updated_at'>) =>
-      void q.upsertOverride.run(o.key, o.name, o.service_id, o.period, o.status, o.cancel_url, o.notes, o.remind_days, o.merged_into, now()),
+    upsertOverride: (o: Omit<OverrideRow, 'updated_at' | 'archived_at'> & { archived_at?: number | null }) =>
+      void q.upsertOverride.run(o.key, o.name, o.service_id, o.period, o.status, o.cancel_url, o.notes, o.remind_days, o.merged_into, o.archived_at ?? null, now()),
     listManual: (): ManualSubscription[] =>
       (q.manuals.all() as Record<string, any>[]).map(r => ({
         key: r.key, groupKey: r.group_key, matchAmount: r.match_amount, period: r.period, name: r.name,

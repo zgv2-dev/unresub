@@ -16,6 +16,7 @@ import {
   computeAlerts,
   detectSubscriptions,
   monthlyEquivalent,
+  PERIOD_DAYS,
   SERVICE_CATALOG,
   serviceById,
   type Period,
@@ -42,6 +43,35 @@ import type { Tenants } from './tenants.ts';
 import type { WebAuthn } from './webauthn.ts';
 
 const PERIODS: Period[] = ['weekly', 'monthly', 'quarterly', 'semiannual', 'annual'];
+
+/** Silence long enough to archive on its own: two missed periods, and at least 90 days. */
+const AUTO_ARCHIVE_DAYS = (period: Period) => Math.max(2 * PERIOD_DAYS[period], 90);
+
+export type Lifecycle = 'active' | 'inactive' | 'archived' | 'hidden';
+
+/**
+ * active: charging as expected (late charges included). inactive: the expected charge never came.
+ * archived: the user archived it, or it has been silent for long; a newer charge brings it back.
+ * hidden: marked "not a subscription".
+ */
+const lifecycleOf = (
+  d: { status: string; lastChargeAt: number },
+  period: Period,
+  o: Partial<Pick<OverrideRow, 'status' | 'archived_at'>>,
+  now: number,
+): { lifecycle: Lifecycle; archivedBy: 'user' | 'auto' | null; archivedAt: number | null } => {
+  if (o.status === 'ignored') return { lifecycle: 'hidden', archivedBy: null, archivedAt: null };
+  // archived_at > 0: archived by the user at that time. < 0: restored by the user at -archived_at.
+  const at = o.archived_at ?? 0;
+  if (at > 0 && d.lastChargeAt <= at) return { lifecycle: 'archived', archivedBy: 'user', archivedAt: at };
+  if (d.status === 'possibly_cancelled') {
+    // Archived, then charged again: the archive is void, and silence counts from that charge or the restore.
+    const silentDays = (now - Math.max(d.lastChargeAt, Math.abs(at))) / 86_400;
+    if (silentDays > AUTO_ARCHIVE_DAYS(period)) return { lifecycle: 'archived', archivedBy: 'auto', archivedAt: null };
+    return { lifecycle: 'inactive', archivedBy: null, archivedAt: null };
+  }
+  return { lifecycle: 'active', archivedBy: null, archivedAt: null };
+};
 
 export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal' | 'convert'>, now = Math.floor(Date.now() / 1000)) => {
   const accounts = new Map(db.listAccounts().map(a => [a.id, a]));
@@ -112,6 +142,7 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
       notes: o.notes ?? null,
       remindDays: o.remind_days ?? null,
       userStatus: o.status ?? null,
+      ...lifecycleOf(d, period, o, now),
       /** The detected period was overridden by the user. */
       periodCorrected: !!o.period,
       /** Series folded into this one; PATCH their key with mergedInto: null to undo. */
@@ -125,20 +156,20 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
         ? { id: account.id, maskedPan: account.masked_pan, type: account.type, isSubscriptionCard: !!account.is_subscription_card }
         : null,
       /** Ready for the "move it to your subscriptions card" hint. */
-      onMainCard: hasSubCard && !!account && !account.is_subscription_card && o.status !== 'ignored',
+      onMainCard: hasSubCard && !!account && !account.is_subscription_card && o.status !== 'ignored' && lifecycleOf(d, period, o, now).lifecycle !== 'archived',
     };
   });
 
   const alerts = computeAlerts(
     items.map(i => ({
       key: i.key, name: i.name, nextChargeAt: i.nextChargeAt, price: i.price, currency: i.currency,
-      accountId: i.accountId, status: i.status, ignored: i.userStatus === 'ignored', remindDays: i.remindDays,
+      accountId: i.accountId, status: i.status, ignored: i.lifecycle === 'hidden' || i.lifecycle === 'archived', remindDays: i.remindDays,
     })),
     [...accounts.values()].map(a => ({ id: a.id, currency: a.currency, balance: a.balance, isSubscriptionCard: !!a.is_subscription_card })),
     { now, convert: sync.convert },
   );
 
-  const counted = items.filter(i => i.userStatus !== 'ignored' && i.status !== 'possibly_cancelled');
+  const counted = items.filter(i => i.lifecycle === 'active');
   return {
     items,
     alerts,
@@ -636,7 +667,7 @@ export const createApp = (deps: AppDeps) => {
   api.patch('/subscriptions/:key', async c => {
     const { db, sync } = c.var.tenant;
     const key = c.req.param('key');
-    const body = await c.req.json<Partial<{ name: string | null; serviceId: string | null; period: Period | null; status: 'confirmed' | 'ignored' | null; cancelUrl: string | null; notes: string | null; remindDays: number | null; mergedInto: string | null }>>();
+    const body = await c.req.json<Partial<{ name: string | null; serviceId: string | null; period: Period | null; status: 'confirmed' | 'ignored' | null; cancelUrl: string | null; notes: string | null; remindDays: number | null; mergedInto: string | null; archived: boolean }>>();
     if (body.mergedInto === key) throw new HTTPException(400, { message: "Can't merge a subscription into itself" });
     if (body.period && !PERIODS.includes(body.period)) throw new HTTPException(400, { message: 'Bad period' });
     if (body.serviceId && !serviceById(body.serviceId)) throw new HTTPException(400, { message: 'Unknown service' });
@@ -657,6 +688,9 @@ export const createApp = (deps: AppDeps) => {
       remind_days: pick(body.remindDays, prev?.remind_days),
       // Explicit null = the user separated it: stored as '' so automatic card-switch linking won't redo it.
       merged_into: body.mergedInto === null ? '' : pick(body.mergedInto, prev?.merged_into),
+      // Archiving stamps the time, so a charge after it un-archives the subscription on its own.
+      // Restoring stores the negative time, which restarts the auto-archive clock.
+      archived_at: body.archived === undefined ? prev?.archived_at ?? null : body.archived ? Math.floor(Date.now() / 1000) : -Math.floor(Date.now() / 1000),
     });
     return c.body(null, 204);
   });

@@ -8,7 +8,7 @@ import { ServiceIcon } from './ServiceIcon.tsx';
 import { SummaryTiles } from './Summary.tsx';
 import { SyncProgress } from './SyncProgress.tsx';
 
-type View = 'upcoming' | 'stale' | 'hidden';
+type View = 'active' | 'inactive' | 'archived';
 
 type Props = {
   data: SubscriptionsResponse;
@@ -16,37 +16,45 @@ type Props = {
   onOpen: (key: string) => void;
   onOpenCards: () => void;
   onHide: (s: SubscriptionItem) => void;
+  onArchive: (s: SubscriptionItem) => void;
   onRestore: (s: SubscriptionItem) => void;
 };
 
 const status = (s: SubscriptionItem, low: boolean): [string, string] =>
-  s.userStatus === 'ignored' ? ['Hidden', 'off']
-  : s.status === 'possibly_cancelled' ? ['Possibly cancelled', 'off']
+  s.lifecycle === 'hidden' ? ['Hidden', 'off']
+  : s.lifecycle === 'archived' ? [s.archivedBy === 'user' ? 'Archived' : 'Archived, silent', 'off']
+  : s.lifecycle === 'inactive' ? ['No recent charge', 'warn']
   : s.status === 'overdue' ? ['Charge late', 'danger']
   : low ? ['Low balance', 'danger']
   : s.needsDetails ? ['Fill in details', 'accent']
   : s.confidence < 0.6 && !s.userStatus ? ['Unsure', 'off']
   : ['Active', 'ok'];
 
+const EMPTY: Record<View, string> = {
+  active: 'No subscriptions yet.',
+  inactive: 'Nothing inactive. Every subscription charged when expected.',
+  archived: 'Nothing archived. Archive a subscription once you cancel it; ones silent for two billing periods move here on their own.',
+};
+
 /** Desktop: cabinet-style table with tabs, like the monobank API cabinet. */
-export const SubscriptionsTable = ({ data, sources, onOpen, onOpenCards, onHide, onRestore }: Props) => {
-  const [view, setView] = useState<View>('upcoming');
-  const visible = data.items.filter(i => i.userStatus !== 'ignored');
-  const live = visible.filter(i => i.status !== 'possibly_cancelled').sort((a, b) => a.nextChargeAt - b.nextChargeAt);
-  const stale = visible.filter(i => i.status === 'possibly_cancelled');
-  const hidden = data.items.filter(i => i.userStatus === 'ignored');
+export const SubscriptionsTable = ({ data, sources, onOpen, onOpenCards, onHide, onArchive, onRestore }: Props) => {
+  const [view, setView] = useState<View>('active');
+  const by = (l: SubscriptionItem['lifecycle']) => data.items.filter(i => i.lifecycle === l);
+  const live = by('active').sort((a, b) => a.nextChargeAt - b.nextChargeAt);
+  const inactive = by('inactive').sort((a, b) => b.lastChargeAt - a.lastChargeAt);
+  const archived = by('archived').sort((a, b) => b.lastChargeAt - a.lastChargeAt);
   const lowKeys = new Set(data.alerts.flatMap(a => (a.type === 'low_balance' ? [a.key] : [])));
   const running = sources.find(s => s.sync.running);
   const cards = new Set(live.map(i => i.account?.id).filter(Boolean)).size;
 
   const groups: [string, SubscriptionItem[]][] =
-    view === 'upcoming'
+    view === 'active'
       ? [
           ['Next 7 days', live.filter(i => daysUntil(i.nextChargeAt) <= 7)],
           ['This month', live.filter(i => daysUntil(i.nextChargeAt) > 7 && daysUntil(i.nextChargeAt) <= 31)],
           ['Later', live.filter(i => daysUntil(i.nextChargeAt) > 31)],
         ]
-      : [['', view === 'stale' ? stale : hidden]];
+      : [['', view === 'inactive' ? inactive : archived]];
   const empty = groups.every(([, l]) => !l.length);
 
   return (
@@ -67,7 +75,7 @@ export const SubscriptionsTable = ({ data, sources, onOpen, onOpenCards, onHide,
       <SummaryTiles totals={data.totals} items={live} />
 
       <div className="tabs" role="tablist">
-        {([['upcoming', 'Upcoming', live.length], ['stale', 'Possibly cancelled', stale.length], ['hidden', 'Hidden', hidden.length]] as const).map(([v, label, n]) => (
+        {([['active', 'Active', live.length], ['inactive', 'Inactive', inactive.length], ['archived', 'Archived', archived.length]] as const).map(([v, label, n]) => (
           <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}>
             {label} <span className="faint num">{n}</span>
           </button>
@@ -75,13 +83,13 @@ export const SubscriptionsTable = ({ data, sources, onOpen, onOpenCards, onHide,
       </div>
       <div className="tbl-wrap">
         {empty ? (
-          <div className="empty small">{view === 'hidden' ? 'Nothing hidden. Use the eye button on a row to mark it as not a subscription.' : view === 'stale' ? 'Nothing here. Subscriptions land here when an expected charge does not come.' : 'No subscriptions yet.'}</div>
+          <div className="empty small">{EMPTY[view]}</div>
         ) : (
           <table className="tbl">
             <thead>
               <tr>
                 <th>Service</th>
-                <th>{view === 'upcoming' ? 'Next charge' : 'Last charge'}</th>
+                <th>{view === 'active' ? 'Next charge' : 'Last charge'}</th>
                 <th className="r">Price</th>
                 <th className="r col-year">Per year</th>
                 <th>Card</th>
@@ -105,7 +113,7 @@ export const SubscriptionsTable = ({ data, sources, onOpen, onOpenCards, onHide,
                   const [label, tone] = status(s, low);
                   const days = daysUntil(s.nextChargeAt);
                   return (
-                    <tr key={s.key} onClick={() => onOpen(s.key)} className={view !== 'upcoming' ? 'dim' : ''}>
+                    <tr key={s.key} onClick={() => onOpen(s.key)} className={view === 'archived' ? 'dim' : ''}>
                       <td>
                         <div className="tbl-svc">
                           <ServiceIcon serviceId={s.serviceId} name={s.needsDetails ? s.detectedName : s.name} />
@@ -116,7 +124,7 @@ export const SubscriptionsTable = ({ data, sources, onOpen, onOpenCards, onHide,
                         </div>
                       </td>
                       <td className="num">
-                        {view === 'upcoming' ? (
+                        {view === 'active' ? (
                           <>
                             <div className={s.status === 'overdue' ? 'late' : days <= 3 ? 'soon' : ''}>{fmtDate(s.nextChargeAt)}</div>
                             <span className="xs faint">{relative(s.nextChargeAt)}</span>
@@ -146,8 +154,12 @@ export const SubscriptionsTable = ({ data, sources, onOpen, onOpenCards, onHide,
                             <Icon name="external" size={16} />
                           </a>
                         )}
-                        {s.userStatus === 'ignored' ? (
+                        {s.lifecycle === 'hidden' || s.lifecycle === 'archived' ? (
                           <button className="btn soft sm" onClick={() => onRestore(s)}>Restore</button>
+                        ) : s.lifecycle === 'inactive' ? (
+                          <button className="icon-btn sm" onClick={() => onArchive(s)} title="Archive" aria-label={`Archive ${s.name}`}>
+                            <Icon name="archive" size={16} />
+                          </button>
                         ) : (
                           <button className="icon-btn sm" onClick={() => onHide(s)} title="Not a subscription" aria-label={`${s.name} is not a subscription`}>
                             <Icon name="eyeOff" size={16} />

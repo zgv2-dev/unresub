@@ -13,11 +13,18 @@ type Props = {
   onHide?: () => void;
   /** In the Hidden list: show a Restore button instead. */
   onRestore?: () => void;
+  /** Inactive list: swipe or the hover button archives instead of hiding. */
+  onArchive?: () => void;
 };
 
 const REVEAL = 132;
 
-export const SubscriptionRow = ({ s, lowBalance, onOpen, onHide, onRestore }: Props) => {
+export const SubscriptionRow = ({ s, lowBalance, onOpen, onHide, onRestore, onArchive }: Props) => {
+  const action = onArchive
+    ? { run: onArchive, icon: 'archive' as const, label: 'Archive', title: `Archive ${s.name}` }
+    : onHide
+      ? { run: onHide, icon: 'eyeOff' as const, label: 'Not a sub', title: `${s.name} is not a subscription` }
+      : null;
   const foreign = s.currency !== LOCAL_CURRENCY && s.localPrice > 0;
   const days = daysUntil(s.nextChargeAt);
   const live = s.status !== 'possibly_cancelled';
@@ -28,7 +35,7 @@ export const SubscriptionRow = ({ s, lowBalance, onOpen, onHide, onRestore }: Pr
   const drag = useRef<{ x: number; y: number; base: number; horizontal: boolean | null } | null>(null);
   const moved = useRef(false);
   const onDown = (e: PointerEvent) => {
-    if (!onHide || e.pointerType === 'mouse') return;
+    if (!action || e.pointerType === 'mouse') return;
     drag.current = { x: e.clientX, y: e.clientY, base: dx, horizontal: null };
     moved.current = false;
   };
@@ -50,9 +57,9 @@ export const SubscriptionRow = ({ s, lowBalance, onOpen, onHide, onRestore }: Pr
 
   return (
     <li className={`swipe ${dx ? 'swiping' : ''}`}>
-      {onHide && (
-        <button className="swipe-action" onClick={onHide} tabIndex={dx ? 0 : -1} aria-hidden={!dx}>
-          <Icon name="eyeOff" size={18} /> Not a sub
+      {action && (
+        <button className={`swipe-action ${onArchive ? 'neutral' : ''}`} onClick={action.run} tabIndex={dx ? 0 : -1} aria-hidden={!dx}>
+          <Icon name={action.icon} size={18} /> {action.label}
         </button>
       )}
       <div
@@ -71,7 +78,7 @@ export const SubscriptionRow = ({ s, lowBalance, onOpen, onHide, onRestore }: Pr
           <div className="row-main">
             <span className="row-title">{s.name}</span>
             <span className="row-meta">
-              <span className={when}>{live ? (days <= 60 ? `${fmtDate(s.nextChargeAt)} · ${relative(s.nextChargeAt)}` : fmtDate(s.nextChargeAt)) : `last charge ${fmtDate(s.lastChargeAt)}`}</span>
+              <span className={when}>{live ? (days <= 60 ? `${fmtDate(s.nextChargeAt)} · ${relative(s.nextChargeAt)}` : fmtDate(s.nextChargeAt)) : `last ${fmtDate(s.lastChargeAt)}`}</span>
             </span>
             {!onRestore && (s.needsDetails || s.onMainCard || lowBalance || s.status === 'overdue' || (s.confidence < 0.6 && !s.userStatus)) && (
               <span className="chips">
@@ -88,9 +95,9 @@ export const SubscriptionRow = ({ s, lowBalance, onOpen, onHide, onRestore }: Pr
             <span>{foreign && `${formatMoney(s.localPrice, LOCAL_CURRENCY)} · `}{PERIOD_SHORT[s.period]}</span>
           </div>
         </button>
-        {onHide && (
-          <button className="icon-btn row-hide" onClick={onHide} aria-label={`${s.name} is not a subscription`} title="Not a subscription">
-            <Icon name="eyeOff" size={18} />
+        {action && (
+          <button className="icon-btn row-hide" onClick={action.run} aria-label={action.title} title={action.title}>
+            <Icon name={action.icon} size={18} />
           </button>
         )}
         {onRestore && (

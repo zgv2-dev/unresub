@@ -231,6 +231,10 @@ export interface SubscriptionItem {
   confidence: number;
   status: DetectionStatus;
   userStatus: 'confirmed' | 'ignored' | null;
+  /** active: charging; inactive: an expected charge didn't come; archived: by the user or after long silence; hidden: not a subscription. */
+  lifecycle: 'active' | 'inactive' | 'archived' | 'hidden';
+  archivedBy: 'user' | 'auto' | null;
+  archivedAt: number | null;
   needsDetails: boolean;
   cancelUrl: string | null;
   notes: string | null;
@@ -383,6 +387,7 @@ export interface CatalogEntry {
 }
 
 export type OverridePatch = Partial<{
+  archived: boolean;
   name: string | null;
   serviceId: string | null;
   period: Period | null;
@@ -397,6 +402,7 @@ export const api = {
   subscriptions: () => call<SubscriptionsResponse>('/subscriptions'),
   updateSubscription: (key: string, patch: OverridePatch) =>
     call<void>(`/subscriptions/${encodeURIComponent(key)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  archive: (key: string, archived = true) => api.updateSubscription(key, { archived }),
   hide: (key: string, hidden = true) => api.updateSubscription(key, { status: hidden ? 'ignored' : null }),
   merge: (key: string, into: string | null) => api.updateSubscription(key, { mergedInto: into }),
   setSplit: (groupKey: string, split: boolean) =>

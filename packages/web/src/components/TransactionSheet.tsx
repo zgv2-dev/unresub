@@ -29,7 +29,8 @@ export const TransactionSheet = ({ t, catalog, onClose, onOpenSubscription, onCr
   const [err, setErr] = useState<string | null>(null);
 
   const charge = t.operationAmount < 0;
-  const owned = !!t.subscriptionKey;
+  // A merchant marked "not a subscription" is plain transactions again.
+  const owned = !!t.subscriptionKey && !t.hidden;
 
   useEffect(() => {
     if (!charge) return;
@@ -91,7 +92,7 @@ export const TransactionSheet = ({ t, catalog, onClose, onOpenSubscription, onCr
       {owned && (
         <div className="fix-row" style={{ marginBottom: 16 }}>
           <span>
-            <strong>{t.hidden ? 'Hidden subscription' : 'Part of a subscription'}</strong>
+            <strong>Part of a subscription</strong>
             <em>{t.subscriptionName}</em>
           </span>
           <button className="btn soft sm" onClick={() => onOpenSubscription(t.subscriptionKey!)}>Open</button>

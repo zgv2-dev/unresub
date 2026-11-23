@@ -230,6 +230,34 @@ describe('server', () => {
       expect(body.alerts).toEqual([]);
     });
 
+    it('archives by hand, un-archives on a new charge, and auto-archives long silence', async () => {
+      const id = seedSource(db);
+      insert(id, makeSeries({ description: 'Gym Sport Life', period: 'monthly', price: 90_000, currency: 980, count: 3, last: addPeriod(now - 3_600, 'monthly', -1) }));
+      insert(id, makeSeries({ description: 'OLD STREAMING', period: 'monthly', price: 10_000, currency: 980, count: 4, last: now - 200 * 86_400 }));
+      insert(id, makeSeries({ description: 'GONE QUIET', period: 'monthly', price: 20_000, currency: 980, count: 4, last: now - 70 * 86_400 }));
+      const byName = async () => Object.fromEntries(((await subsOf()).items as any[]).map(i => [i.detectedName, i]));
+      let s = await byName();
+      expect(s['Gym Sport Life'].lifecycle).toBe('active');
+      expect(s['OLD STREAMING']).toMatchObject({ lifecycle: 'archived', archivedBy: 'auto' });
+      expect(s['GONE QUIET'].lifecycle).toBe('inactive');
+
+      expect((await patch(s['Gym Sport Life'].key, { archived: true })).status).toBe(204);
+      let body = await subsOf();
+      expect(body.items.find((i: any) => i.detectedName === 'Gym Sport Life')).toMatchObject({ lifecycle: 'archived', archivedBy: 'user' });
+      expect(body.totals.count).toBe(0);
+
+      // Restoring an auto-archived one keeps it out of the archive until it is silent again.
+      await patch(s['OLD STREAMING'].key, { archived: false });
+      s = await byName();
+      expect(s['OLD STREAMING'].lifecycle).toBe('inactive');
+
+      // A charge after the archive brings it back.
+      const archivedAt = body.items.find((i: any) => i.detectedName === 'Gym Sport Life').archivedAt as number;
+      insert(id, makeSeries({ description: 'Gym Sport Life', period: 'monthly', price: 90_000, currency: 980, count: 1, last: archivedAt + 60 }));
+      s = await byName();
+      expect(s['Gym Sport Life'].lifecycle).toBe('active');
+    });
+
     it('merges and unmerges two series', async () => {
       const id = seedSource(db);
       insert(id, makeSeries({ description: 'SERVICE OLD NAME', period: 'monthly', price: 500, currency: 840, rate: 41, count: 3, last: now - 70 * 86_400 }));

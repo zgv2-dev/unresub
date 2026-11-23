@@ -22,9 +22,13 @@ type Props = {
   onOpenTransaction?: (transactionId: string) => void;
   /** A charge was unlinked or relinked: refresh lists without closing the sheet. */
   onRefresh?: () => void;
+  /** Archive (cancelled/ended) with an undo toast. */
+  onArchive: () => void;
+  /** Un-hide or un-archive. */
+  onRestore: () => void;
 };
 
-export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide, onOpenTransaction, onRefresh }: Props) => {
+export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide, onArchive, onRestore, onOpenTransaction, onRefresh }: Props) => {
   const formId = useId();
   const [name, setName] = useState(s.needsDetails ? '' : s.name);
   const [serviceId, setServiceId] = useState(s.serviceId ?? '');
@@ -97,6 +101,17 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
         </>
       }
     >
+      {s.lifecycle !== 'active' && (
+        <div className={`callout ${s.lifecycle === 'inactive' ? '' : 'neutral'}`}>
+          {s.lifecycle === 'inactive' && <>The charge expected on {fmtDate(s.nextChargeAt)} never came (last one {fmtDate(s.lastChargeAt)}). If you cancelled it, archive it.</>}
+          {s.lifecycle === 'archived' && (
+            <>
+              {s.archivedBy === 'user' && s.archivedAt ? `A new charge brings it back. Archived by you on ${fmtDate(s.archivedAt)}` : `No charge since ${fmtDate(s.lastChargeAt)}, so it was archived automatically. A new charge brings it back.`}
+            </>
+          )}
+          {s.lifecycle === 'hidden' && <>Hidden as not a subscription. New charges from this merchant stay hidden.</>}
+        </div>
+      )}
       {s.needsDetails && (
         <div className="callout">
           We don't know this merchant yet. Pick the service or give it a name so it is easy to recognise.
@@ -105,9 +120,19 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
 
       <div className="stat-grid num">
         <div>
-          <span>Next charge</span>
-          <strong>{fmtDate(s.nextChargeAt)}</strong>
-          <em>{relative(s.nextChargeAt)}</em>
+          {s.lifecycle === 'active' ? (
+            <>
+              <span>Next charge</span>
+              <strong>{fmtDate(s.nextChargeAt)}</strong>
+              <em>{relative(s.nextChargeAt)}</em>
+            </>
+          ) : (
+            <>
+              <span>Last charge</span>
+              <strong>{fmtDate(s.lastChargeAt)}</strong>
+              <em>{relative(s.lastChargeAt)}</em>
+            </>
+          )}
         </div>
         <div>
           <span>Card</span>
@@ -137,13 +162,13 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
             <Icon name="external" size={18} /> Cancel
           </button>
         )}
-        {s.userStatus === 'ignored' ? (
-          <button className="btn soft" disabled={busy} onClick={() => void act(() => api.hide(s.key, false))}>
-            <Icon name="eyeOff" size={18} /> Restore
+        {s.lifecycle === 'archived' || s.lifecycle === 'hidden' ? (
+          <button className="btn soft" disabled={busy} onClick={onRestore}>
+            <Icon name="refresh" size={18} /> Restore
           </button>
         ) : (
-          <button className="btn soft" disabled={busy} onClick={onHide}>
-            <Icon name="eyeOff" size={18} /> Not a subscription
+          <button className="btn soft" disabled={busy} onClick={onArchive}>
+            <Icon name="archive" size={18} /> Archive
           </button>
         )}
       </div>
@@ -188,6 +213,18 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
         <p className="xs faint">
           Wrong service or period: change it above and save. It sticks when new charges come in.
         </p>
+
+        {s.lifecycle !== 'hidden' && (
+          <div className="fix-row">
+            <span>
+              <strong>Not a subscription</strong>
+              <em>Turn its charges back into plain transactions, now and in future.</em>
+            </span>
+            <button className="btn ghost sm" disabled={busy} onClick={onHide}>
+              <Icon name="eyeOff" size={16} /> Not a subscription
+            </button>
+          </div>
+        )}
 
         {!!s.merged.length && (
           <div className="fix-row">
