@@ -218,16 +218,44 @@ describe('server', () => {
       db.insertTransactions(`${id}:acc`, series.map(({ accountId: _, ...t }) => ({ ...t, accountExternalId: 'acc', raw: null })));
     const now = Math.floor(Date.now() / 1000);
 
-    it('keeps a hidden subscription hidden when new charges arrive', async () => {
+    const dismiss = async (key: string) =>
+      (await (await app.request(`/api/subscriptions/${encodeURIComponent(key)}/dismiss`, { method: 'POST', headers: auth })).json()) as { batch: string };
+    const txns = async () => ((await (await app.request('/api/transactions', { headers: auth })).json()) as any).items as any[];
+
+    it('"Not a subscription" sends charges back to Transactions and stays dismissed as new charges arrive', async () => {
       const id = seedSource(db);
       insert(id, makeSeries({ description: 'Gym Sport Life', period: 'monthly', price: 90_000, currency: 980, count: 3, last: addPeriod(now - 3 * 86_400, 'monthly', -1) }));
       const [gym] = (await subsOf()).items;
-      expect((await patch(gym.key, { status: 'ignored' })).status).toBe(204);
+      expect((await patch(gym.key, { status: 'ignored' })).status).toBe(400);
+      const { batch } = await dismiss(gym.key);
       insert(id, makeSeries({ description: 'Gym Sport Life', period: 'monthly', price: 90_000, currency: 980, count: 1, last: now - 3 * 86_400 }));
       const body = await subsOf();
-      expect(body.items).toMatchObject([{ key: gym.key, userStatus: 'ignored', chargeCount: 4 }]);
+      expect(body.items).toEqual([]);
       expect(body.totals.count).toBe(0);
       expect(body.alerts).toEqual([]);
+      expect((await txns()).every(t => t.subscriptionKey === null)).toBe(true);
+      // Undo brings it back.
+      expect((await app.request(`/api/suppressions/${batch}`, { method: 'DELETE', headers: auth })).status).toBe(204);
+      expect((await subsOf()).items).toMatchObject([{ key: gym.key, chargeCount: 4 }]);
+    });
+
+    it('"Make it a subscription" clears a dismissal on that merchant', async () => {
+      const id = seedSource(db);
+      insert(id, makeSeries({ description: 'Gym Sport Life', period: 'monthly', price: 90_000, currency: 980, count: 3, last: now - 3 * 86_400 }));
+      const [gym] = (await subsOf()).items;
+      await dismiss(gym.key);
+      const [t] = await txns();
+      const res = await app.request('/api/manual-subscriptions', {
+        method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ transactionId: t.id, period: 'monthly', name: 'Gym' }),
+      });
+      expect(res.status).toBe(201);
+      const { key } = (await res.json()) as { key: string };
+      expect((await subsOf()).items).toMatchObject([{ key, chargeCount: 3 }]);
+      // Dismissing the manual one deletes it and keeps the merchant out of detection; undo restores it.
+      const { batch } = await dismiss(key);
+      expect((await subsOf()).items).toEqual([]);
+      await app.request(`/api/suppressions/${batch}`, { method: 'DELETE', headers: auth });
+      expect((await subsOf()).items).toMatchObject([{ key }]);
     });
 
     it('archives by hand, un-archives on a new charge, and auto-archives long silence', async () => {
@@ -306,7 +334,8 @@ describe('server', () => {
       old.exec("INSERT INTO subscription_overrides (key, status, updated_at) VALUES ('k', 'ignored', 1)");
       old.close();
       const migrated = openDb(path);
-      expect(migrated.listOverrides()).toMatchObject([{ key: 'k', status: 'ignored', merged_into: null }]);
+      expect(migrated.listOverrides()).toMatchObject([{ key: 'k', status: null, merged_into: null }]);
+      expect([...migrated.suppressedKeys()]).toEqual(['k']);
       migrated.close();
     });
   });
@@ -326,7 +355,7 @@ describe('server', () => {
       let body = await get('/api/transactions?debit=1');
       expect(body.total).toBe(4);
       expect(body.items[0]).toMatchObject({ description: 'Silpo', subscriptionKey: null });
-      expect(body.items[1]).toMatchObject({ description: 'ANTHROPIC', subscriptionName: 'Anthropic (Claude)', hidden: false });
+      expect(body.items[1]).toMatchObject({ description: 'ANTHROPIC', subscriptionName: 'Anthropic (Claude)' });
       body = await get('/api/transactions?q=silp');
       expect(body.items.map((t: any) => t.description)).toEqual(['Silpo']);
       body = await get('/api/transactions?unassigned=1&min=40000');

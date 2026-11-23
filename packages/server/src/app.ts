@@ -47,20 +47,18 @@ const PERIODS: Period[] = ['weekly', 'monthly', 'quarterly', 'semiannual', 'annu
 /** Silence long enough to archive on its own: two missed periods, and at least 90 days. */
 const AUTO_ARCHIVE_DAYS = (period: Period) => Math.max(2 * PERIOD_DAYS[period], 90);
 
-export type Lifecycle = 'active' | 'inactive' | 'archived' | 'hidden';
+export type Lifecycle = 'active' | 'inactive' | 'archived';
 
 /**
  * active: charging as expected (late charges included). inactive: the expected charge never came.
  * archived: the user archived it, or it has been silent for long; a newer charge brings it back.
- * hidden: marked "not a subscription".
  */
 const lifecycleOf = (
   d: { status: string; lastChargeAt: number },
   period: Period,
-  o: Partial<Pick<OverrideRow, 'status' | 'archived_at'>>,
+  o: Partial<Pick<OverrideRow, 'archived_at'>>,
   now: number,
 ): { lifecycle: Lifecycle; archivedBy: 'user' | 'auto' | null; archivedAt: number | null } => {
-  if (o.status === 'ignored') return { lifecycle: 'hidden', archivedBy: null, archivedAt: null };
   // archived_at > 0: archived by the user at that time. < 0: restored by the user at -archived_at.
   const at = o.archived_at ?? 0;
   if (at > 0 && d.lastChargeAt <= at) return { lifecycle: 'archived', archivedBy: 'user', archivedAt: at };
@@ -80,6 +78,8 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
   const splitGroups = db.splitGroups();
   // Charges the user unlinked stay out of every subscription.
   const excluded = db.excludedIds();
+  // "Not a subscription": those series are never proposed again; their charges stay plain transactions.
+  const suppressed = db.suppressedKeys();
   const transactions = db.listTransactions().filter(t => !excluded.has(t.id));
   // Manual subscriptions claim their transactions first, so detection doesn't count them twice.
   const manual = buildManualSubscriptions(db.listManual(), transactions, { now, toLocal: sync.toLocal });
@@ -88,11 +88,12 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
   const raw = extendWithSwitchedCharges(
     [
       ...manual.subscriptions,
-      ...detectSubscriptions(transactions.filter(t => !manual.claimed.has(t.id)), { now, toLocal: sync.toLocal, splitGroups }),
+      ...detectSubscriptions(transactions.filter(t => !manual.claimed.has(t.id)), { now, toLocal: sync.toLocal, splitGroups })
+        .filter(d => !suppressed.has(d.key)),
     ],
     transactions,
     { now, toLocal: sync.toLocal },
-  );
+  ).filter(d => !suppressed.has(d.key));
   // The user's own merge decisions win; merged_into = '' means "keep separate".
   const userMerge = new Set([...overrides].filter(([, o]) => o.merged_into != null).map(([k]) => k));
   const autoLinks = linkCardSwitches(raw, userMerge);
@@ -156,14 +157,14 @@ export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal'
         ? { id: account.id, maskedPan: account.masked_pan, type: account.type, isSubscriptionCard: !!account.is_subscription_card }
         : null,
       /** Ready for the "move it to your subscriptions card" hint. */
-      onMainCard: hasSubCard && !!account && !account.is_subscription_card && o.status !== 'ignored' && lifecycleOf(d, period, o, now).lifecycle !== 'archived',
+      onMainCard: hasSubCard && !!account && !account.is_subscription_card && lifecycleOf(d, period, o, now).lifecycle !== 'archived',
     };
   });
 
   const alerts = computeAlerts(
     items.map(i => ({
       key: i.key, name: i.name, nextChargeAt: i.nextChargeAt, price: i.price, currency: i.currency,
-      accountId: i.accountId, status: i.status, ignored: i.lifecycle === 'hidden' || i.lifecycle === 'archived', remindDays: i.remindDays,
+      accountId: i.accountId, status: i.status, ignored: i.lifecycle === 'archived', remindDays: i.remindDays,
     })),
     [...accounts.values()].map(a => ({ id: a.id, currency: a.currency, balance: a.balance, isSubscriptionCard: !!a.is_subscription_card })),
     { now, convert: sync.convert },
@@ -667,8 +668,9 @@ export const createApp = (deps: AppDeps) => {
   api.patch('/subscriptions/:key', async c => {
     const { db, sync } = c.var.tenant;
     const key = c.req.param('key');
-    const body = await c.req.json<Partial<{ name: string | null; serviceId: string | null; period: Period | null; status: 'confirmed' | 'ignored' | null; cancelUrl: string | null; notes: string | null; remindDays: number | null; mergedInto: string | null; archived: boolean }>>();
+    const body = await c.req.json<Partial<{ name: string | null; serviceId: string | null; period: Period | null; status: 'confirmed' | null; cancelUrl: string | null; notes: string | null; remindDays: number | null; mergedInto: string | null; archived: boolean }>>();
     if (body.mergedInto === key) throw new HTTPException(400, { message: "Can't merge a subscription into itself" });
+    if (body.status === ('ignored' as never)) throw new HTTPException(400, { message: 'Use POST /api/subscriptions/:key/dismiss' });
     if (body.period && !PERIODS.includes(body.period)) throw new HTTPException(400, { message: 'Bad period' });
     if (body.serviceId && !serviceById(body.serviceId)) throw new HTTPException(400, { message: 'Unknown service' });
     if (body.remindDays != null && !(Number.isInteger(body.remindDays) && body.remindDays >= 0 && body.remindDays <= 30)) {
@@ -695,20 +697,50 @@ export const createApp = (deps: AppDeps) => {
     return c.body(null, 204);
   });
 
+  /**
+   * "Not a subscription": the series (and anything merged into it) is never proposed again and its
+   * charges go back to Transactions. A manual one is deleted. Returns a batch id for Undo.
+   */
+  api.post('/subscriptions/:key/dismiss', c => {
+    const { db, sync } = c.var.tenant;
+    const key = c.req.param('key');
+    const item = buildSubscriptionsView(db, sync).items.find(i => i.key === key);
+    if (!item) throw new HTTPException(404);
+    const batch = randomToken(8);
+    const keys = [...new Set([key, ...item.mergedKeys])];
+    const manuals = db.listManual().filter(m => keys.includes(m.key));
+    const ruleKeys = [...new Set(keys.flatMap(k => {
+      const m = manuals.find(x => x.key === k);
+      // A manual subscription leaves its charges to detection, so suppress what detection would call them.
+      return m ? [m.groupKey, ...(m.matchAmount != null ? [`${m.groupKey}|${m.matchAmount}`] : [])] : [k];
+    }))];
+    db.suppress(batch, ruleKeys, manuals[0]);
+    manuals.forEach(m => db.deleteManual(m.key));
+    return c.json({ batch });
+  });
+
+  /** Undo a dismissal. */
+  api.delete('/suppressions/:batch', c => {
+    const { db } = c.var.tenant;
+    const { found, manual } = db.unsuppressBatch(c.req.param('batch'));
+    if (!found) throw new HTTPException(404);
+    if (manual && !db.listManual().some(m => m.key === manual.key)) db.insertManual(manual);
+    return c.body(null, 204);
+  });
+
   // --- Transactions ---
   const txnView = (db: Db, sync: SyncService, now = Math.floor(Date.now() / 1000)) => {
     const view = buildSubscriptionsView(db, sync, now);
-    const owner = new Map<string, { key: string; name: string; hidden: boolean }>();
-    for (const i of view.items) for (const id of i.transactionIds) owner.set(id, { key: i.key, name: i.name, hidden: i.userStatus === 'ignored' });
+    const owner = new Map<string, { key: string; name: string }>();
+    for (const i of view.items) for (const id of i.transactionIds) owner.set(id, { key: i.key, name: i.name });
     return { owner, view };
   };
-  const toRow = (t: ReturnType<Db['listTransactions']>[number], owner: Map<string, { key: string; name: string; hidden: boolean }>, excluded?: Set<string>) => {
+  const toRow = (t: ReturnType<Db['listTransactions']>[number], owner: Map<string, { key: string; name: string }>, excluded?: Set<string>) => {
     const o = owner.get(t.id);
     return {
       ...t,
       subscriptionKey: o?.key ?? null,
       subscriptionName: o?.name ?? null,
-      hidden: o?.hidden ?? false,
       /** Unlinked from a subscription by the user. */
       excluded: excluded?.has(t.id) ?? false,
     };
@@ -779,6 +811,7 @@ export const createApp = (deps: AppDeps) => {
     const key = `manual:${randomToken(6)}`;
     const ids = [...new Set([t.id, ...(body.attachIds ?? [])])].slice(0, 500);
     db.unexcludeTransactions(ids); // attaching by hand overrides an earlier unlink
+    if (groupKey) db.unsuppressGroup(groupKey); // and an earlier "Not a subscription" on this merchant
     db.insertManual({
       key,
       groupKey: groupKey || `txn:${t.id}`, // no usable merchant: only the attached charges count

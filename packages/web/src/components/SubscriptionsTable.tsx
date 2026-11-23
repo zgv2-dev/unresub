@@ -21,8 +21,7 @@ type Props = {
 };
 
 const status = (s: SubscriptionItem, low: boolean): [string, string] =>
-  s.lifecycle === 'hidden' ? ['Hidden', 'off']
-  : s.lifecycle === 'archived' ? [s.archivedBy === 'user' ? 'Archived' : 'Archived, silent', 'off']
+  s.lifecycle === 'archived' ? [s.archivedBy === 'user' ? 'Archived' : 'Archived, silent', 'off']
   : s.lifecycle === 'inactive' ? ['No recent charge', 'warn']
   : s.status === 'overdue' ? ['Charge late', 'danger']
   : low ? ['Low balance', 'danger']
@@ -154,7 +153,7 @@ export const SubscriptionsTable = ({ data, sources, onOpen, onOpenCards, onHide,
                             <Icon name="external" size={16} />
                           </a>
                         )}
-                        {s.lifecycle === 'hidden' || s.lifecycle === 'archived' ? (
+                        {s.lifecycle === 'archived' ? (
                           <button className="btn soft sm" onClick={() => onRestore(s)}>Restore</button>
                         ) : s.lifecycle === 'inactive' ? (
                           <button className="icon-btn sm" onClick={() => onArchive(s)} title="Archive" aria-label={`Archive ${s.name}`}>

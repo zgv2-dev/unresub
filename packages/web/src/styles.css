@@ -377,7 +377,6 @@ code { font: 12.5px ui-monospace, 'SF Mono', Menlo, monospace; background: var(-
 .row-hide { flex: none; opacity: 0; margin-right: 4px; transition: opacity 0.15s; }
 .swipe:hover .row-hide, .row-hide:focus-visible { opacity: 1; }
 @media (hover: none) { .row-hide { display: none; } }
-.row-restore { flex: none; margin-right: 8px; }
 
 /* Undo toast */
 .toast {

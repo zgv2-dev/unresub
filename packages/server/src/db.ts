@@ -89,13 +89,22 @@ CREATE TABLE IF NOT EXISTS subscription_overrides (
   name        TEXT,
   service_id  TEXT,
   period      TEXT,
-  status      TEXT,             -- 'confirmed' | 'ignored' | NULL
+  status      TEXT,             -- 'confirmed' | NULL (old 'ignored' rows migrate to suppressed_subscriptions)
   cancel_url  TEXT,
   notes       TEXT,
   remind_days INTEGER,          -- reminder lead time, for later notifications
   merged_into TEXT,             -- fold this series into another key
   archived_at INTEGER,          -- archived by the user at this time; a newer charge brings it back
   updated_at  INTEGER NOT NULL
+);
+
+-- "Not a subscription": detection never proposes these keys again and their charges stay plain transactions.
+CREATE TABLE IF NOT EXISTS suppressed_subscriptions (
+  key        TEXT PRIMARY KEY,  -- detection key (groupKey or groupKey|amount)
+  group_key  TEXT NOT NULL,     -- "Make it a subscription" on this merchant clears it
+  batch      TEXT NOT NULL,     -- one dismissal, undone together
+  manual     TEXT,              -- JSON of a manual subscription deleted by the dismissal, for Undo
+  created_at INTEGER NOT NULL
 );
 `;
 
@@ -129,7 +138,7 @@ export interface OverrideRow {
   name: string | null;
   service_id: string | null;
   period: Period | null;
-  status: 'confirmed' | 'ignored' | null;
+  status: 'confirmed' | null;
   cancel_url: string | null;
   notes: string | null;
   remind_days: number | null;
@@ -140,6 +149,37 @@ export interface OverrideRow {
 
 const now = () => Math.floor(Date.now() / 1000);
 
+/** Merchant part of a detection key: 'svc:x|840|999' -> 'svc:x|840'. */
+export const groupOfKey = (key: string) => key.split('|').slice(0, 2).join('|');
+
+/** Hidden subscriptions (status 'ignored') used to stay listed; they become suppression rules, charges go back to Transactions. */
+const migrateHidden = (db: DatabaseSync) => {
+  const hidden = db.prepare("SELECT key FROM subscription_overrides WHERE status = 'ignored'").all() as { key: string }[];
+  if (!hidden.length) return;
+  const ins = db.prepare('INSERT OR IGNORE INTO suppressed_subscriptions (key, group_key, batch, manual, created_at) VALUES (?, ?, ?, ?, ?)');
+  db.exec('BEGIN');
+  try {
+    for (const { key } of hidden) {
+      if (key.startsWith('manual:')) {
+        const m = db.prepare('SELECT * FROM manual_subscriptions WHERE key = ?').get(key) as Record<string, any> | undefined;
+        if (m) {
+          for (const k of new Set([m.group_key, m.match_amount != null ? `${m.group_key}|${m.match_amount}` : m.group_key])) {
+            ins.run(k, groupOfKey(k), `migrated:${key}`, null, now());
+          }
+          db.prepare('DELETE FROM manual_subscriptions WHERE key = ?').run(key);
+        }
+      } else {
+        ins.run(key, groupOfKey(key), `migrated:${key}`, null, now());
+      }
+    }
+    db.exec("UPDATE subscription_overrides SET status = NULL WHERE status = 'ignored'");
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+};
+
 export const openDb = (path: string) => {
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
@@ -147,6 +187,7 @@ export const openDb = (path: string) => {
   const cols = (table: string) => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name));
   if (!cols('subscription_overrides').has('merged_into')) db.exec('ALTER TABLE subscription_overrides ADD COLUMN merged_into TEXT');
   if (!cols('subscription_overrides').has('archived_at')) db.exec('ALTER TABLE subscription_overrides ADD COLUMN archived_at INTEGER');
+  migrateHidden(db);
 
   const q = {
     insertSource: db.prepare(
@@ -199,6 +240,11 @@ export const openDb = (path: string) => {
     splitGroups: db.prepare('SELECT group_key FROM split_groups'),
     addSplit: db.prepare('INSERT OR IGNORE INTO split_groups (group_key, created_at) VALUES (?, ?)'),
     removeSplit: db.prepare('DELETE FROM split_groups WHERE group_key = ?'),
+    suppressed: db.prepare('SELECT key FROM suppressed_subscriptions'),
+    suppress: db.prepare('INSERT OR REPLACE INTO suppressed_subscriptions (key, group_key, batch, manual, created_at) VALUES (?, ?, ?, ?, ?)'),
+    batch: db.prepare('SELECT * FROM suppressed_subscriptions WHERE batch = ?'),
+    deleteBatch: db.prepare('DELETE FROM suppressed_subscriptions WHERE batch = ?'),
+    unsuppressGroup: db.prepare('DELETE FROM suppressed_subscriptions WHERE group_key = ?'),
   };
 
   return {
@@ -283,6 +329,19 @@ export const openDb = (path: string) => {
     setManualTransactionIds: (key: string, ids: string[]) => void q.setManualTxns.run(JSON.stringify(ids), key),
     splitGroups: () => new Set((q.splitGroups.all() as { group_key: string }[]).map(r => r.group_key)),
     setSplit: (groupKey: string, split: boolean) => void (split ? q.addSplit.run(groupKey, now()) : q.removeSplit.run(groupKey)),
+
+    suppressedKeys: () => new Set((q.suppressed.all() as { key: string }[]).map(r => r.key)),
+    /** Records one "Not a subscription" dismissal; a manual subscription in it is kept for Undo. */
+    suppress: (batch: string, keys: string[], manual?: ManualSubscription) =>
+      keys.forEach((k, i) => q.suppress.run(k, groupOfKey(k), batch, i === 0 && manual ? JSON.stringify(manual) : null, now())),
+    /** Undo a dismissal: drops its rules and returns the manual subscription it removed, if any. */
+    unsuppressBatch: (batch: string) => {
+      const rows = q.batch.all(batch) as { manual: string | null }[];
+      q.deleteBatch.run(batch);
+      const m = rows.find(r => r.manual)?.manual;
+      return { found: rows.length > 0, manual: m ? (JSON.parse(m) as ManualSubscription) : null };
+    },
+    unsuppressGroup: (groupKey: string) => void q.unsuppressGroup.run(groupKey),
   };
 };
 

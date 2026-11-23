@@ -30,7 +30,7 @@ export const TransactionSheet = ({ t, catalog, onClose, onOpenSubscription, onCr
 
   const charge = t.operationAmount < 0;
   // A merchant marked "not a subscription" is plain transactions again.
-  const owned = !!t.subscriptionKey && !t.hidden;
+  const owned = !!t.subscriptionKey;
 
   useEffect(() => {
     if (!charge) return;

@@ -106,17 +106,18 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
     return () => clearTimeout(t);
   }, [toast]);
 
-  /** Hide now, offer undo. The server keys it by merchant pattern, so future charges stay hidden. */
+  /** "Not a subscription": its charges go back to Transactions; the server keeps detection from proposing it again. */
   const hide = async (s: SubscriptionItem) => {
     setOpenKey(null);
     // Drop it from the list right away; the reload confirms.
-    setData(d => d && { ...d, items: d.items.map(i => (i.key === s.key ? { ...i, userStatus: 'ignored' } : i)) });
+    setData(d => d && { ...d, items: d.items.filter(i => i.key !== s.key) });
     try {
-      await api.hide(s.key);
-      setToast({ text: `${s.name} moved to transactions`, undo: () => api.hide(s.key, false) });
+      const { batch } = await api.dismiss(s.key);
+      setToast({ text: `${s.name} moved to transactions`, undo: () => api.undoDismiss(batch) });
     } catch (e) {
       setError((e as Error).message);
     }
+    setTxVersion(v => v + 1);
     void load();
   };
   /** Archive (cancelled or ended) with undo. A new charge brings it back on its own. */
@@ -131,11 +132,10 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
     }
     void load();
   };
-  /** Back to the list: un-hide a hidden one, un-archive an archived one. */
+  /** Back to the list from Archived. */
   const restore = async (s: SubscriptionItem) => {
-    const hidden = s.lifecycle === 'hidden';
-    await (hidden ? api.hide(s.key, false) : api.archive(s.key, false)).catch(e => setError((e as Error).message));
-    setToast({ text: `${s.name} restored`, undo: () => (hidden ? api.hide(s.key) : api.archive(s.key)) });
+    await api.archive(s.key, false).catch(e => setError((e as Error).message));
+    setToast({ text: `${s.name} restored`, undo: () => api.archive(s.key) });
     void load();
   };
 
@@ -263,7 +263,7 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
           key={open.key}
           s={open}
           catalog={catalog}
-          others={data?.items.filter(i => i.key !== open.key && i.userStatus !== 'ignored') ?? []}
+          others={data?.items.filter(i => i.key !== open.key) ?? []}
           onClose={() => setOpenKey(null)}
           onSaved={() => (setOpenKey(null), void load())}
           onHide={() => void hide(open)}

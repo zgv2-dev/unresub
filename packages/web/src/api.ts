@@ -230,9 +230,9 @@ export interface SubscriptionItem {
   chargeCount: number;
   confidence: number;
   status: DetectionStatus;
-  userStatus: 'confirmed' | 'ignored' | null;
-  /** active: charging; inactive: an expected charge didn't come; archived: by the user or after long silence; hidden: not a subscription. */
-  lifecycle: 'active' | 'inactive' | 'archived' | 'hidden';
+  userStatus: 'confirmed' | null;
+  /** active: charging; inactive: an expected charge didn't come; archived: by the user or after long silence. */
+  lifecycle: 'active' | 'inactive' | 'archived';
   archivedBy: 'user' | 'auto' | null;
   archivedAt: number | null;
   needsDetails: boolean;
@@ -272,7 +272,6 @@ export interface TransactionRow {
   hold?: boolean;
   subscriptionKey: string | null;
   subscriptionName: string | null;
-  hidden: boolean;
   /** Unlinked from a subscription by the user */
   excluded?: boolean;
 }
@@ -391,7 +390,7 @@ export type OverridePatch = Partial<{
   name: string | null;
   serviceId: string | null;
   period: Period | null;
-  status: 'confirmed' | 'ignored' | null;
+  status: 'confirmed' | null;
   cancelUrl: string | null;
   notes: string | null;
   remindDays: number | null;
@@ -403,7 +402,9 @@ export const api = {
   updateSubscription: (key: string, patch: OverridePatch) =>
     call<void>(`/subscriptions/${encodeURIComponent(key)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   archive: (key: string, archived = true) => api.updateSubscription(key, { archived }),
-  hide: (key: string, hidden = true) => api.updateSubscription(key, { status: hidden ? 'ignored' : null }),
+  /** "Not a subscription": its charges go back to Transactions and detection stops proposing it. */
+  dismiss: (key: string) => call<{ batch: string }>(`/subscriptions/${encodeURIComponent(key)}/dismiss`, { method: 'POST' }),
+  undoDismiss: (batch: string) => call<void>(`/suppressions/${encodeURIComponent(batch)}`, { method: 'DELETE' }),
   merge: (key: string, into: string | null) => api.updateSubscription(key, { mergedInto: into }),
   setSplit: (groupKey: string, split: boolean) =>
     call<void>(`/split-groups/${encodeURIComponent(groupKey)}`, { method: split ? 'PUT' : 'DELETE' }),

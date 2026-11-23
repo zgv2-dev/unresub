@@ -109,7 +109,6 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
               {s.archivedBy === 'user' && s.archivedAt ? `A new charge brings it back. Archived by you on ${fmtDate(s.archivedAt)}` : `No charge since ${fmtDate(s.lastChargeAt)}, so it was archived automatically. A new charge brings it back.`}
             </>
           )}
-          {s.lifecycle === 'hidden' && <>Hidden as not a subscription. New charges from this merchant stay hidden.</>}
         </div>
       )}
       {s.needsDetails && (
@@ -162,7 +161,7 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
             <Icon name="external" size={18} /> Cancel
           </button>
         )}
-        {s.lifecycle === 'archived' || s.lifecycle === 'hidden' ? (
+        {s.lifecycle === 'archived' ? (
           <button className="btn soft" disabled={busy} onClick={onRestore}>
             <Icon name="refresh" size={18} /> Restore
           </button>
@@ -214,17 +213,15 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
           Wrong service or period: change it above and save. It sticks when new charges come in.
         </p>
 
-        {s.lifecycle !== 'hidden' && (
-          <div className="fix-row">
-            <span>
-              <strong>Not a subscription</strong>
-              <em>Turn its charges back into plain transactions, now and in future.</em>
-            </span>
-            <button className="btn ghost sm" disabled={busy} onClick={onHide}>
-              <Icon name="eyeOff" size={16} /> Not a subscription
-            </button>
-          </div>
-        )}
+        <div className="fix-row">
+          <span>
+            <strong>Not a subscription</strong>
+            <em>Turn its charges back into plain transactions, now and in future.</em>
+          </span>
+          <button className="btn ghost sm" disabled={busy} onClick={onHide}>
+            <Icon name="eyeOff" size={16} /> Not a subscription
+          </button>
+        </div>
 
         {!!s.merged.length && (
           <div className="fix-row">

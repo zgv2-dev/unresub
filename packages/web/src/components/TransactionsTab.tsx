@@ -150,7 +150,7 @@ const TxnRow = ({ t, account, onOpen }: { t: TransactionRow; account?: Account; 
             {account?.maskedPan && <> · ••{last4(account.maskedPan)}</>}
             {t.hold && <> · pending</>}
           </span>
-          {t.subscriptionKey && !t.hidden && (
+          {t.subscriptionKey && (
             <span className="chips">
               <span className="chip ok">{t.subscriptionName}</span>
             </span>
