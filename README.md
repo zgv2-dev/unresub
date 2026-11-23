@@ -37,8 +37,19 @@ One-time setup:
    openssl rand -base64 32   # UNRESUB_SECRET_KEY
    openssl rand -hex 24      # UNRESUB_API_TOKEN (you type this into the web UI and the app)
    ```
-2. **Create the project.** Sign in at https://railway.com with GitHub → **New Project** → **Deploy from GitHub repo** → pick `zgv2-dev/unresub` (allow the Railway GitHub app access to it if asked). The first build may fail on missing variables; that's fine.
-3. **Add a volume.** In the project canvas, right-click the service (or press `Ctrl/⌘ K` → "volume") → **Attach volume** → mount path `/data`. The database lives at `/data/unresub.db`.
+2. **Create the project.** Sign in at https://railway.com with GitHub → **New Project** → **Deploy from GitHub repo** → pick `zgv2-dev/unresub` (allow the Railway GitHub app access to it if asked).
+
+   Railway sees the pnpm workspace and offers **four services** (`@unresub/web`, `@unresub/core`, `@unresub/server`, `@unresub/mobile`). You need **only one**: the server image already contains the web UI, `core` is a library, and `mobile` is built by GitHub Actions. Before pressing **Deploy**:
+   - Delete `@unresub/web`, `@unresub/core` and `@unresub/mobile`: tap each → **Settings** → bottom of the page → **Delete service**.
+   - Open `@unresub/server` → **Settings** and fix what Railway pre-filled for the package folder:
+     - **Source → Root Directory**: empty (repo root), not `packages/server`. That's what makes it pick up the root `Dockerfile` and `railway.json`.
+     - **Build → Builder**: `Dockerfile` (`railway.json` sets this too). Clear any custom build or start command.
+     - **Watch Paths**: empty (`railway.json` provides them).
+     - Optional: rename the service to `unresub`.
+   - Do steps 3 and 4 below, then press **Deploy**.
+
+   If it gets messy: ⋮ next to Deploy → discard the changes, then **Create → Empty Service** → its **Settings → Source → Connect Repo** → `zgv2-dev/unresub`, root directory empty.
+3. **Add a volume** to that one service. On a computer: right-click the service on the canvas → **Attach volume**. On a phone: **Create** (or `Ctrl/⌘ K`) → **Volume** → choose the service. Mount path `/data`. The database lives at `/data/unresub.db`.
 4. **Set variables.** Service → **Variables**:
    - `UNRESUB_SECRET_KEY`, `UNRESUB_API_TOKEN`: from step 1
    - `PORT` = `8787`
