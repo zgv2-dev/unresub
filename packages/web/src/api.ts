@@ -62,6 +62,14 @@ export interface SubscriptionItem {
   category: string | null;
   account: { id: string; maskedPan: string | null; type: string | null; isSubscriptionCard: boolean } | null;
   onMainCard: boolean;
+  groupKey: string;
+  /** One merchant may really be several subscriptions: offer "split by price". */
+  canSplit: boolean;
+  /** Came from a split; undo through groupKey. */
+  isSplit: boolean;
+  /** Series folded into this one. */
+  merged: { key: string; name: string }[];
+  periodCorrected: boolean;
 }
 
 export interface SubscriptionsResponse {
@@ -134,12 +142,17 @@ export type OverridePatch = Partial<{
   cancelUrl: string | null;
   notes: string | null;
   remindDays: number | null;
+  mergedInto: string | null;
 }>;
 
 export const api = {
   subscriptions: () => call<SubscriptionsResponse>('/subscriptions'),
   updateSubscription: (key: string, patch: OverridePatch) =>
     call<void>(`/subscriptions/${encodeURIComponent(key)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  hide: (key: string, hidden = true) => api.updateSubscription(key, { status: hidden ? 'ignored' : null }),
+  merge: (key: string, into: string | null) => api.updateSubscription(key, { mergedInto: into }),
+  setSplit: (groupKey: string, split: boolean) =>
+    call<void>(`/split-groups/${encodeURIComponent(groupKey)}`, { method: split ? 'PUT' : 'DELETE' }),
   sources: () => call<Source[]>('/sources'),
   connectMonobank: (token: string) =>
     call<{ id: string; name: string; accounts: number; webhook: string }>('/sources/monobank', { method: 'POST', body: JSON.stringify({ token }) }),

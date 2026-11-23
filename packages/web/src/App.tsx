@@ -27,6 +27,7 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('subs');
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ text: string; undo: () => Promise<unknown> } | null>(null);
   const theme = useTheme();
 
   const load = useCallback(async () => {
@@ -59,6 +60,31 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
     scrollTo({ top: 0 });
   }, [tab]);
 
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6_000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  /** Hide now, offer undo. The server keys it by merchant pattern, so future charges stay hidden. */
+  const hide = async (s: SubscriptionItem) => {
+    setOpenKey(null);
+    // Drop it from the list right away; the reload confirms.
+    setData(d => d && { ...d, items: d.items.map(i => (i.key === s.key ? { ...i, userStatus: 'ignored' } : i)) });
+    try {
+      await api.hide(s.key);
+      setToast({ text: `${s.name} hidden`, undo: () => api.hide(s.key, false) });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    void load();
+  };
+  const restore = async (s: SubscriptionItem) => {
+    await api.hide(s.key, false).catch(e => setError((e as Error).message));
+    setToast({ text: `${s.name} restored`, undo: () => api.hide(s.key) });
+    void load();
+  };
+
   const open = data?.items.find(i => i.key === openKey) ?? null;
   // Largest shortfall per card (alerts are cumulative, so the last one wins).
   const shortfall = new Map(data?.alerts.flatMap(a => (a.type === 'low_balance' ? [[a.accountId, { amount: a.shortfall, currency: a.currency }] as const] : [])));
@@ -84,7 +110,7 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
       {error && <div className="alert danger" style={{ marginBottom: 14 }}><span className="alert-icon"><Icon name="alert" /></span><div className="alert-body"><strong>Can't reach the server</strong><span>{error}</span></div></div>}
 
       {tab === 'subs' ? (
-        <SubscriptionsTab data={data} sources={sources} syncing={syncing} onOpen={setOpenKey} onOpenCards={() => setTab('cards')} />
+        <SubscriptionsTab data={data} sources={sources} syncing={syncing} onOpen={setOpenKey} onOpenCards={() => setTab('cards')} onHide={hide} onRestore={restore} />
       ) : (
         <CardsTab sources={sources} accounts={accounts} shortfall={shortfall} onChange={load} />
       )}
@@ -106,9 +132,18 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
           key={open.key}
           s={open}
           catalog={catalog}
+          others={data?.items.filter(i => i.key !== open.key && i.userStatus !== 'ignored') ?? []}
           onClose={() => setOpenKey(null)}
           onSaved={() => (setOpenKey(null), void load())}
+          onHide={() => void hide(open)}
         />
+      )}
+
+      {toast && (
+        <div className="toast" role="status">
+          <span>{toast.text}</span>
+          <button onClick={() => { const t = toast; setToast(null); void t.undo().then(load); }}>Undo</button>
+        </div>
       )}
     </div>
   );
@@ -120,14 +155,16 @@ type SubsProps = {
   syncing: boolean;
   onOpen: (key: string) => void;
   onOpenCards: () => void;
+  onHide: (s: SubscriptionItem) => void;
+  onRestore: (s: SubscriptionItem) => void;
 };
 
-const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards }: SubsProps) => {
-  const [showIgnored, setShowIgnored] = useState(false);
+const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide, onRestore }: SubsProps) => {
+  const [showHidden, setShowHidden] = useState(false);
   if (!data) return <Skeleton />;
 
-  const ignoredCount = data.items.filter(i => i.userStatus === 'ignored').length;
-  const items = data.items.filter(i => showIgnored || i.userStatus !== 'ignored');
+  const hidden = data.items.filter(i => i.userStatus === 'ignored');
+  const items = data.items.filter(i => i.userStatus !== 'ignored');
   const live = items.filter(i => i.status !== 'possibly_cancelled').sort((a, b) => a.nextChargeAt - b.nextChargeAt);
   const groups: [string, SubscriptionItem[]][] = [
     ['Next 7 days', live.filter(i => daysUntil(i.nextChargeAt) <= 7)],
@@ -167,18 +204,30 @@ const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards }: SubsP
               {!stale && <span className="sum num">{formatMoney(total, LOCAL_CURRENCY)}</span>}
             </div>
             <ul className={`list card ${stale ? 'dim' : ''}`}>
-              {list.map(s => <SubscriptionRow key={s.key} s={s} lowBalance={lowKeys.has(s.key)} onOpen={() => onOpen(s.key)} />)}
+              {list.map(s => <SubscriptionRow key={s.key} s={s} lowBalance={lowKeys.has(s.key)} onOpen={() => onOpen(s.key)} onHide={() => onHide(s)} />)}
             </ul>
           </section>
         );
       })}
 
-      {!!ignoredCount && (
-        <div style={{ textAlign: 'center', marginTop: 18 }}>
-          <button className="btn ghost sm" onClick={() => setShowIgnored(v => !v)}>
-            {showIgnored ? 'Hide ignored' : `Show ignored (${ignoredCount})`}
-          </button>
-        </div>
+      {!!hidden.length && (
+        <section className="section">
+          <div className="section-head">
+            <h2>
+              <button className="btn ghost sm" onClick={() => setShowHidden(v => !v)} aria-expanded={showHidden}>
+                Hidden ({hidden.length}) <Icon name="chevron" size={16} style={{ transform: showHidden ? 'rotate(90deg)' : undefined }} />
+              </button>
+            </h2>
+          </div>
+          {showHidden && (
+            <>
+              <p className="xs faint" style={{ margin: '0 4px 8px' }}>Marked as not a subscription. New charges from the same merchant stay here.</p>
+              <ul className="list card dim">
+                {hidden.map(s => <SubscriptionRow key={s.key} s={s} lowBalance={false} onOpen={() => onOpen(s.key)} onRestore={() => onRestore(s)} />)}
+              </ul>
+            </>
+          )}
+        </section>
       )}
     </>
   );

@@ -329,3 +329,38 @@ code { font: 12.5px ui-monospace, 'SF Mono', Menlo, monospace; background: var(-
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 .clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .bank-card .tag.danger { align-self: flex-start; background: rgb(255 255 255 / 0.95); color: #c81e3a; text-transform: none; letter-spacing: 0; font-size: 12px; }
+
+/* Swipe-to-hide rows */
+.swipe { position: relative; overflow: hidden; border-radius: 14px; }
+.swipe-action {
+  position: absolute; inset: 0 0 0 auto; width: 132px; border: 0; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--danger); color: #fff; font: inherit; font-size: 13px; font-weight: 600;
+}
+.swipe-body { position: relative; display: flex; align-items: center; background: var(--surface); transition: transform 0.2s ease; touch-action: pan-y; }
+.swipe-body .row-btn { flex: 1; min-width: 0; }
+.row-hide { flex: none; opacity: 0; margin-right: 4px; transition: opacity 0.15s; }
+.swipe:hover .row-hide, .row-hide:focus-visible { opacity: 1; }
+@media (hover: none) { .row-hide { display: none; } }
+.row-restore { flex: none; margin-right: 8px; }
+
+/* Undo toast */
+.toast {
+  position: fixed; z-index: 30; left: 50%; transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom) + var(--nav-h) + 24px);
+  width: min(420px, calc(100% - 32px)); display: flex; align-items: center; gap: 12px;
+  padding: 10px 10px 10px 16px; border-radius: 16px; background: var(--text); color: var(--bg);
+  box-shadow: var(--shadow-lg); font-size: 14px; animation: toast-in 0.2s ease;
+}
+.toast span { flex: 1; min-width: 0; }
+.toast button { flex: none; border: 0; background: transparent; color: var(--accent-soft); font: inherit; font-weight: 700; padding: 6px 10px; cursor: pointer; }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+
+/* Detection fixes in the sheet */
+.fix { margin-top: 22px; gap: 12px; }
+.fix-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 12px; border-radius: 14px; background: var(--surface-2); }
+.fix-row > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; font-size: 14px; }
+.fix-row em { font-style: normal; font-size: 12.5px; color: var(--text-3); }
+.fix-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.fix-btns .input { height: 36px; padding-block: 0; max-width: 220px; }
+.swipe:not(.swiping) .swipe-action { visibility: hidden; }

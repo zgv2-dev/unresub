@@ -6,9 +6,18 @@ import { Icon } from './Icon.tsx';
 import { ServiceIcon } from './ServiceIcon.tsx';
 import { Sheet } from './Sheet.tsx';
 
-type Props = { s: SubscriptionItem; catalog: CatalogEntry[]; onClose: () => void; onSaved: () => void };
+type Props = {
+  s: SubscriptionItem;
+  catalog: CatalogEntry[];
+  /** Other visible subscriptions, for "same as…" merging. */
+  others: SubscriptionItem[];
+  onClose: () => void;
+  onSaved: () => void;
+  /** Hides with an undo toast (handled by the parent). */
+  onHide: () => void;
+};
 
-export const SubscriptionSheet = ({ s, catalog, onClose, onSaved }: Props) => {
+export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide }: Props) => {
   const [name, setName] = useState(s.needsDetails ? '' : s.name);
   const [serviceId, setServiceId] = useState(s.serviceId ?? '');
   const [period, setPeriod] = useState<Period>(s.period);
@@ -17,6 +26,18 @@ export const SubscriptionSheet = ({ s, catalog, onClose, onSaved }: Props) => {
   const [remindDays, setRemindDays] = useState(s.remindDays ?? 1);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [mergeInto, setMergeInto] = useState('');
+
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      onSaved();
+    } catch (e) {
+      setErr((e as Error).message);
+      setBusy(false);
+    }
+  };
 
   const foreign = s.currency !== LOCAL_CURRENCY && s.localPrice > 0;
   const local = (v: number) => (foreign ? formatMoney(v, LOCAL_CURRENCY) : null);
@@ -98,9 +119,15 @@ export const SubscriptionSheet = ({ s, catalog, onClose, onSaved }: Props) => {
             <Icon name="external" size={18} /> Cancel
           </button>
         )}
-        <button className="btn soft" disabled={busy} onClick={() => void save(s.userStatus === 'ignored' ? null : 'ignored')}>
-          <Icon name="eyeOff" size={18} /> {s.userStatus === 'ignored' ? 'Un-ignore' : 'Ignore'}
-        </button>
+        {s.userStatus === 'ignored' ? (
+          <button className="btn soft" disabled={busy} onClick={() => void act(() => api.hide(s.key, false))}>
+            <Icon name="eyeOff" size={18} /> Restore
+          </button>
+        ) : (
+          <button className="btn soft" disabled={busy} onClick={onHide}>
+            <Icon name="eyeOff" size={18} /> Not a subscription
+          </button>
+        )}
       </div>
 
       <form className="stack" onSubmit={e => (e.preventDefault(), void save())}>
@@ -137,11 +164,72 @@ export const SubscriptionSheet = ({ s, catalog, onClose, onSaved }: Props) => {
           <textarea className="input" value={notes} onChange={e => setNotes(e.target.value)} rows={2} />
         </label>
         <p className="xs faint">
-          Bank description <code>{s.detectedName}</code> · {s.chargeCount} charges seen{foreign && ` · rate ${s.rate.toFixed(2)}`}
+          {s.periodCorrected ? 'Period set by you; the next date follows it. ' : ''}Bank description <code>{s.detectedName}</code> · {s.chargeCount} charges seen{foreign && ` · rate ${s.rate.toFixed(2)}`}
         </p>
         {err && <p className="error small">{err}</p>}
         <button className="btn block" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
       </form>
+
+      <div className="stack fix">
+        <div className="divider-title">Detected wrong?</div>
+        <p className="xs faint">
+          Wrong service or period: change it above and save. It sticks when new charges come in.
+        </p>
+
+        {!!s.merged.length && (
+          <div className="fix-row">
+            <span>
+              <strong>Combined with</strong>
+              <em>{s.merged.map(m => m.name).join(', ')}</em>
+            </span>
+            <div className="fix-btns">
+              {s.merged.map(m => (
+                <button key={m.key} className="btn ghost sm" disabled={busy} onClick={() => void act(() => api.merge(m.key, null))}>
+                  Separate {s.merged.length > 1 ? m.name : ''}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!!others.length && (
+          <div className="fix-row">
+            <span>
+              <strong>Same subscription as another row</strong>
+              <em>For example after a price change or a new bank description.</em>
+            </span>
+            <div className="fix-btns">
+              <select className="input" value={mergeInto} onChange={e => setMergeInto(e.target.value)} aria-label="Combine with">
+                <option value="">Pick one…</option>
+                {others.map(o => <option key={o.key} value={o.key}>{o.name} · {formatMoney(o.price, o.currency)}</option>)}
+              </select>
+              <button className="btn soft sm" disabled={busy || !mergeInto} onClick={() => void act(() => api.merge(s.key, mergeInto))}>
+                Combine
+              </button>
+            </div>
+          </div>
+        )}
+
+        {s.canSplit && (
+          <div className="fix-row">
+            <span>
+              <strong>Several subscriptions in one</strong>
+              <em>Split charges from {s.detectedName} by price.</em>
+            </span>
+            <button className="btn soft sm" disabled={busy} onClick={() => void act(() => api.setSplit(s.groupKey, true))}>Split by price</button>
+          </div>
+        )}
+
+        {s.isSplit && (
+          <div className="fix-row">
+            <span>
+              <strong>Split by price</strong>
+              <em>All charges from {s.detectedName} are separated by amount.</em>
+            </span>
+            <button className="btn ghost sm" disabled={busy} onClick={() => void act(() => api.setSplit(s.groupKey, false))}>Undo split</button>
+          </div>
+        )}
+      </div>
     </Sheet>
   );
 };
