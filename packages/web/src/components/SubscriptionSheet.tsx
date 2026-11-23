@@ -210,6 +210,16 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
           </div>
         )}
 
+        {s.manual && (
+          <div className="fix-row">
+            <span>
+              <strong>Added by you</strong>
+              <em>Remove it to send its charges back to Transactions.</em>
+            </span>
+            <button className="btn ghost sm" disabled={busy} onClick={() => void act(() => api.deleteManual(s.key))}>Remove</button>
+          </div>
+        )}
+
         {s.canSplit && (
           <div className="fix-row">
             <span>

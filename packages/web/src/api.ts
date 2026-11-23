@@ -70,6 +70,45 @@ export interface SubscriptionItem {
   /** Series folded into this one. */
   merged: { key: string; name: string }[];
   periodCorrected: boolean;
+  /** Created by hand from a transaction. */
+  manual: boolean;
+}
+
+export interface TransactionRow {
+  id: string;
+  accountId: string;
+  time: number;
+  description: string;
+  mcc: number | null;
+  amount: number;
+  accountCurrency: number;
+  operationAmount: number;
+  operationCurrency: number;
+  counterName?: string | null;
+  hold?: boolean;
+  subscriptionKey: string | null;
+  subscriptionName: string | null;
+  hidden: boolean;
+}
+
+export interface TransactionFilters {
+  q?: string;
+  account?: string;
+  from?: number;
+  to?: number;
+  min?: number;
+  max?: number;
+  debit?: boolean;
+  unassigned?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface SimilarResponse {
+  transaction: TransactionRow;
+  groupKey: string;
+  suggested: { name: string; serviceId: string | null };
+  items: (TransactionRow & { sameAmount: boolean })[];
 }
 
 export interface SubscriptionsResponse {
@@ -153,6 +192,16 @@ export const api = {
   merge: (key: string, into: string | null) => api.updateSubscription(key, { mergedInto: into }),
   setSplit: (groupKey: string, split: boolean) =>
     call<void>(`/split-groups/${encodeURIComponent(groupKey)}`, { method: split ? 'PUT' : 'DELETE' }),
+  transactions: (f: TransactionFilters) => {
+    const qs = new URLSearchParams(
+      Object.entries(f).flatMap(([k, v]) => (v === undefined || v === '' || v === false ? [] : [[k, v === true ? '1' : String(v)]])),
+    );
+    return call<{ total: number; items: TransactionRow[] }>(`/transactions?${qs}`);
+  },
+  similar: (id: string) => call<SimilarResponse>(`/transactions/${encodeURIComponent(id)}/similar`),
+  createManual: (body: { transactionId: string; name: string; serviceId: string | null; period: Period; matchAmount: boolean; attachIds: string[] }) =>
+    call<{ key: string }>('/manual-subscriptions', { method: 'POST', body: JSON.stringify(body) }),
+  deleteManual: (key: string) => call<void>(`/manual-subscriptions/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   sources: () => call<Source[]>('/sources'),
   connectMonobank: (token: string) =>
     call<{ id: string; name: string; accounts: number; webhook: string }>('/sources/monobank', { method: 'POST', body: JSON.stringify({ token }) }),
