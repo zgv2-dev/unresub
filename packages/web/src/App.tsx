@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import { formatMoney, LOCAL_CURRENCY } from '@unresub/core';
-import { api, ApiError, getApiToken, setApiToken, type Account, type CatalogEntry, type Source, type SubscriptionItem, type SubscriptionsResponse } from './api.ts';
+import { api, ApiError, getApiToken, setApiToken, type Account, type CatalogEntry, type TransactionRow, type Source, type SubscriptionItem, type SubscriptionsResponse } from './api.ts';
 import { daysUntil } from './format.ts';
 import { useTheme } from './theme.ts';
 import { AlertBanner } from './components/AlertBanner.tsx';
 import { CardsTab } from './components/CardsTab.tsx';
-import { Icon } from './components/Icon.tsx';
+import { Icon, type IconName } from './components/Icon.tsx';
+import { SubscriptionsTable } from './components/SubscriptionsTable.tsx';
+import { useMedia } from './hooks.ts';
 import { Login, Logo } from './components/Login.tsx';
 import { Summary } from './components/Summary.tsx';
 import { SubscriptionRow } from './components/SubscriptionRow.tsx';
 import { SubscriptionSheet } from './components/SubscriptionSheet.tsx';
 import { SyncProgress } from './components/SyncProgress.tsx';
+import { TransactionSheet } from './components/TransactionSheet.tsx';
+import { TransactionsTab } from './components/TransactionsTab.tsx';
 
-type Tab = 'subs' | 'cards';
+type Tab = 'subs' | 'tx' | 'cards';
 
 export const App = () => {
   const [authed, setAuthed] = useState(!!getApiToken());
@@ -25,10 +29,13 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [txn, setTxn] = useState<TransactionRow | null>(null);
+  const [txVersion, setTxVersion] = useState(0);
   const [tab, setTab] = useState<Tab>('subs');
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ text: string; undo: () => Promise<unknown> } | null>(null);
   const theme = useTheme();
+  const desktop = useMedia('(min-width: 960px)');
 
   const load = useCallback(async () => {
     try {
@@ -55,6 +62,11 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
     const t = setInterval(() => void load(), 5_000);
     return () => clearInterval(t);
   }, [syncing, load]);
+
+  // Refetch transactions once a sync finishes.
+  useEffect(() => {
+    if (!syncing) setTxVersion(v => v + 1);
+  }, [syncing]);
 
   useEffect(() => {
     scrollTo({ top: 0 });
@@ -90,42 +102,119 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
   const shortfall = new Map(data?.alerts.flatMap(a => (a.type === 'low_balance' ? [[a.accountId, { amount: a.shortfall, currency: a.currency }] as const] : [])));
   const lowBalance = shortfall.size > 0;
 
+  const subsContent = !data ? (
+    <Skeleton />
+  ) : desktop ? (
+    <SubscriptionsTable data={data} sources={sources} onOpen={setOpenKey} onOpenCards={() => setTab('cards')} onHide={hide} onRestore={restore} />
+  ) : (
+    <SubscriptionsTab data={data} sources={sources} syncing={syncing} onOpen={setOpenKey} onOpenCards={() => setTab('cards')} onHide={hide} onRestore={restore} />
+  );
+  const content =
+    tab === 'subs' ? subsContent
+    : tab === 'tx' ? <TransactionsTab accounts={accounts} version={txVersion} onOpenTransaction={setTxn} />
+    : <CardsTab sources={sources} accounts={accounts} shortfall={shortfall} onChange={load} />;
+  const errorBox = error && (
+    <div className="alert danger" style={{ marginBottom: 14 }}>
+      <span className="alert-icon"><Icon name="alert" /></span>
+      <div className="alert-body"><strong>Can't reach the server</strong><span>{error}</span></div>
+    </div>
+  );
+  const themeBtn = (
+    <button className="icon-btn" onClick={theme.cycle} aria-label={`Theme: ${theme.pref}`} title={`Theme: ${theme.pref}`}>
+      <Icon name={theme.pref === 'light' ? 'sun' : theme.pref === 'dark' ? 'moon' : 'auto'} />
+    </button>
+  );
+  const navItems: { id: Tab; label: string; icon: IconName; badge?: string | number; dot?: string }[] = [
+    { id: 'subs', label: 'Subscriptions', icon: 'list', badge: data?.totals.count },
+    { id: 'tx', label: 'Transactions', icon: 'receipt' },
+    { id: 'cards', label: 'Cards', icon: 'card', dot: lowBalance ? 'var(--danger)' : syncing ? 'var(--accent)' : undefined },
+  ];
+  const owner = sources[0]?.name.split('·').at(-1)?.trim() ?? 'UnReSub';
+
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <Logo />
-          UnReSub
-        </div>
-        <div className="topbar-actions">
-          <button className="icon-btn" onClick={theme.cycle} aria-label={`Theme: ${theme.pref}`} title={`Theme: ${theme.pref}`}>
-            <Icon name={theme.pref === 'light' ? 'sun' : theme.pref === 'dark' ? 'moon' : 'auto'} />
-          </button>
-          <button className="icon-btn" onClick={onLogout} aria-label="Log out" title="Log out">
-            <Icon name="logout" />
-          </button>
-        </div>
-      </header>
-
-      {error && <div className="alert danger" style={{ marginBottom: 14 }}><span className="alert-icon"><Icon name="alert" /></span><div className="alert-body"><strong>Can't reach the server</strong><span>{error}</span></div></div>}
-
-      {tab === 'subs' ? (
-        <SubscriptionsTab data={data} sources={sources} syncing={syncing} onOpen={setOpenKey} onOpenCards={() => setTab('cards')} onHide={hide} onRestore={restore} />
+    <div className={desktop ? 'desk' : 'app'}>
+      {desktop ? (
+        <>
+          <header className="desk-header">
+            <div className="desk-header-in">
+              <div className="brand">
+                <Logo />
+                <span>Un<span className="brand-accent">ReSub</span></span>
+              </div>
+              <div className="topbar-actions">
+                {syncing && <span className="pill accent"><Icon name="refresh" size={14} /> Syncing</span>}
+                {themeBtn}
+                <span className="vsep" />
+                <button className="avatar" onClick={onLogout} title="Log out" aria-label="Log out">
+                  {initials(owner)}
+                  <span className="avatar-hover"><Icon name="logout" size={16} /></span>
+                </button>
+              </div>
+            </div>
+          </header>
+          <div className="desk-body">
+            <aside className="desk-side card">
+              <div className="profile">
+                <span className="avatar static">{initials(owner)}</span>
+                <div>
+                  <strong>{owner}</strong>
+                  <span className="xs muted">Subscriptions cabinet</span>
+                </div>
+              </div>
+              <nav className="side-nav">
+                <div className="side-title">Overview</div>
+                {navItems.map(n => (
+                  <button key={n.id} className="side-item" aria-current={tab === n.id ? 'page' : undefined} onClick={() => setTab(n.id)}>
+                    <span className="side-ico"><Icon name={n.icon} size={16} /></span>
+                    {n.label}
+                    {n.dot && <span className="side-dot" style={{ background: n.dot }} />}
+                    {n.badge != null && <span className="side-badge num">{n.badge}</span>}
+                  </button>
+                ))}
+              </nav>
+              {data && (
+                <div className="side-stat">
+                  <span className="xs muted">Per month</span>
+                  <strong className="num">{formatMoney(data.totals.monthlyLocal, LOCAL_CURRENCY)}</strong>
+                </div>
+              )}
+              <button className="btn outline block" onClick={() => setTab('cards')}>
+                <Icon name="plus" size={18} /> Connect monobank
+              </button>
+            </aside>
+            <main className="desk-main card">
+              {errorBox}
+              {content}
+            </main>
+          </div>
+        </>
       ) : (
-        <CardsTab sources={sources} accounts={accounts} shortfall={shortfall} onChange={load} />
+        <>
+          <header className="topbar">
+            <div className="brand">
+              <Logo />
+              UnReSub
+            </div>
+            <div className="topbar-actions">
+              {themeBtn}
+              <button className="icon-btn" onClick={onLogout} aria-label="Log out" title="Log out">
+                <Icon name="logout" />
+              </button>
+            </div>
+          </header>
+          {errorBox}
+          {content}
+          <nav className="tabbar" role="tablist" style={{ gridTemplateColumns: `repeat(${navItems.length}, 1fr)` }}>
+            {navItems.map(n => (
+              <button key={n.id} className="tab" role="tab" aria-selected={tab === n.id} onClick={() => setTab(n.id)}>
+                {n.dot && <span className="dot" style={{ background: n.dot }} />}
+                <Icon name={n.icon} size={22} />
+                {n.label}
+              </button>
+            ))}
+          </nav>
+        </>
       )}
-
-      <nav className="tabbar" role="tablist">
-        <button className="tab" role="tab" aria-selected={tab === 'subs'} onClick={() => setTab('subs')}>
-          <Icon name="list" size={22} />
-          Subscriptions
-        </button>
-        <button className="tab" role="tab" aria-selected={tab === 'cards'} onClick={() => setTab('cards')}>
-          {(lowBalance || syncing) && <span className="dot" style={syncing && !lowBalance ? { background: 'var(--accent)' } : undefined} />}
-          <Icon name="card" size={22} />
-          Cards
-        </button>
-      </nav>
 
       {open && (
         <SubscriptionSheet
@@ -136,6 +225,17 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
           onClose={() => setOpenKey(null)}
           onSaved={() => (setOpenKey(null), void load())}
           onHide={() => void hide(open)}
+        />
+      )}
+
+      {txn && (
+        <TransactionSheet
+          key={txn.id}
+          t={txn}
+          catalog={catalog}
+          onClose={() => setTxn(null)}
+          onOpenSubscription={key => (setTxn(null), setOpenKey(key))}
+          onCreated={key => (setTxn(null), setTxVersion(v => v + 1), void load().then(() => setOpenKey(key)))}
         />
       )}
 
@@ -150,7 +250,6 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
 };
 
 type SubsProps = {
-  data: SubscriptionsResponse | null;
   sources: Source[];
   syncing: boolean;
   onOpen: (key: string) => void;
@@ -159,9 +258,8 @@ type SubsProps = {
   onRestore: (s: SubscriptionItem) => void;
 };
 
-const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide, onRestore }: SubsProps) => {
+const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide, onRestore }: SubsProps & { data: SubscriptionsResponse }) => {
   const [showHidden, setShowHidden] = useState(false);
-  if (!data) return <Skeleton />;
 
   const hidden = data.items.filter(i => i.userStatus === 'ignored');
   const items = data.items.filter(i => i.userStatus !== 'ignored');
@@ -239,3 +337,6 @@ const Skeleton = () => (
     {[0, 1, 2, 3].map(i => <div key={i} className="skeleton" style={{ height: 64 }} />)}
   </div>
 );
+
+const initials = (name: string) =>
+  name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]!.toUpperCase()).join('') || 'U';

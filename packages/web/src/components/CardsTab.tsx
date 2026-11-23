@@ -60,6 +60,7 @@ export const CardsTab = ({ sources, accounts, shortfall, onChange }: Props) => {
           {src.sync.lastError && <p className="small error">{src.sync.lastError}</p>}
           {src.sync.running && <SyncProgress src={src} />}
 
+          <div className="accounts-grid">
           {accounts.filter(a => a.sourceId === src.id).map(a => (
             <div key={a.id} className="account-row">
               <div className={`bank-card ${a.isSubscriptionCard ? 'subs' : ''}`}>
@@ -86,6 +87,7 @@ export const CardsTab = ({ sources, accounts, shortfall, onChange }: Props) => {
               </label>
             </div>
           ))}
+          </div>
         </section>
       ))}
 

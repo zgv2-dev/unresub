@@ -383,3 +383,111 @@ code { font: 12.5px ui-monospace, 'SF Mono', Menlo, monospace; background: var(-
 .check em { font-style: normal; font-size: 12.5px; color: var(--text-3); }
 .attach .row-btn { cursor: pointer; }
 .attach input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+
+/* ---------- Desktop cabinet layout (≥ 960px) ---------- */
+.desk { min-height: 100dvh; display: flex; flex-direction: column; }
+.desk-header { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+.desk-header-in { max-width: 1360px; margin: 0 auto; height: 64px; padding: 0 32px; display: flex; align-items: center; justify-content: space-between; }
+.desk-header .brand { font-size: 21px; }
+.brand-accent { color: var(--accent); }
+.desk-header .icon-btn { box-shadow: none; background: transparent; }
+.desk-header .icon-btn:hover { background: var(--surface-2); }
+.topbar-actions { align-items: center; }
+.vsep { width: 1px; height: 24px; background: var(--line); margin: 0 6px; }
+.avatar {
+  position: relative; width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer; overflow: hidden;
+  display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #fff; background: var(--hero); flex: none;
+}
+.avatar.static { cursor: default; width: 44px; height: 44px; }
+.avatar-hover { position: absolute; inset: 0; display: grid; place-items: center; background: rgb(0 0 0 / 0.55); opacity: 0; transition: opacity 0.15s; }
+.avatar:hover .avatar-hover, .avatar:focus-visible .avatar-hover { opacity: 1; }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 99px; font-size: 13.5px; font-weight: 600; background: var(--surface-2); color: var(--text-2); }
+.pill.accent { background: var(--accent-soft); color: var(--accent); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+
+.desk-body { flex: 1; width: 100%; max-width: 1360px; margin: 0 auto; padding: 28px 32px; display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 28px; align-items: start; }
+.desk-side { position: sticky; top: 96px; padding: 16px 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.profile { display: flex; gap: 12px; align-items: center; padding: 0 8px 12px; }
+.profile > div { display: flex; flex-direction: column; min-width: 0; }
+.profile strong { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-nav { display: flex; flex-direction: column; gap: 2px; }
+.side-title { font-size: 13px; color: var(--text-3); padding: 6px 12px 6px; }
+.side-item {
+  display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 12px; border: 0; border-radius: 12px;
+  background: transparent; cursor: pointer; font-size: 14.5px; font-weight: 500; color: var(--text); text-align: left;
+}
+.side-item:hover { background: var(--surface-2); }
+.side-item[aria-current='page'] { background: var(--surface-2); font-weight: 650; }
+.side-ico { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); color: var(--text-2); flex: none; }
+.side-item[aria-current='page'] .side-ico { background: var(--accent); color: #fff; }
+.side-dot { width: 8px; height: 8px; border-radius: 50%; }
+.side-badge { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--text-3); }
+.side-stat { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 4px; padding: 12px; border-top: 1px solid var(--line); }
+.side-stat strong { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+.btn.outline { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); height: 44px; }
+.btn.outline:hover { background: var(--accent-soft); }
+
+.desk-main { padding: 32px; min-height: 480px; }
+.desk-main .card { box-shadow: none; border: 1px solid var(--line); }
+.desk-main .page-title { margin-top: 0; }
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.page-head h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.025em; }
+.page-head p { margin-top: 4px; font-size: 14px; }
+.desk .alerts { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.desk .toast { bottom: 28px; }
+
+/* Summary tiles */
+.tiles { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px; margin-bottom: 26px; }
+.tile { border-radius: 18px; padding: 18px; display: flex; flex-direction: column; gap: 4px; background: var(--surface-2); min-width: 0; }
+.tile.hero { box-shadow: none; padding: 18px 20px; }
+.tile.hero .hero-amount { font-size: 34px; }
+.tile > span { font-size: 13px; color: var(--text-3); font-weight: 500; }
+.tile > strong { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile > em { font-style: normal; font-size: 13px; color: var(--text-2); margin-top: auto; }
+
+/* Tabs (monobank-like folder tabs) and tables */
+.tabs { display: flex; gap: 4px; }
+.tabs button {
+  border: 0; cursor: pointer; padding: 10px 16px; border-radius: 12px 12px 0 0; background: var(--surface-2);
+  font-size: 14px; font-weight: 600; color: var(--text-2); display: inline-flex; gap: 6px; align-items: baseline;
+}
+.tabs button[aria-selected='true'] { background: var(--surface); color: var(--text); box-shadow: 0 -1px 0 var(--line), 1px 0 0 var(--line), -1px 0 0 var(--line); position: relative; z-index: 1; }
+.tbl-wrap { border: 1px solid var(--line); border-radius: 0 16px 16px 16px; overflow-x: auto; background: var(--surface); }
+.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tbl th { text-align: left; font-weight: 500; font-size: 13px; color: var(--text-3); padding: 14px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.tbl td { padding: 12px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.tbl tbody tr:last-child td { border-bottom: 0; }
+.tbl tbody + tbody tr.tbl-group td { border-top: 1px solid var(--line); }
+.tbl tbody tr:not(.tbl-group) { cursor: pointer; transition: background 0.12s; }
+.tbl tbody tr:not(.tbl-group):hover { background: var(--surface-2); }
+.tbl tr.dim td { color: var(--text-2); }
+.tbl .r { text-align: right; }
+.tbl-group td { background: var(--surface-2); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); padding: 8px 16px; }
+.tbl-group td span { float: right; text-transform: none; letter-spacing: 0; }
+.tbl-svc { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.tbl-svc .svc { width: 36px; height: 36px; border-radius: 11px; font-size: 15px; }
+.tbl-svc .svc svg { width: 18px; height: 18px; }
+.tbl-svc > div { display: flex; flex-direction: column; min-width: 0; }
+.tbl-svc strong { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.tbl .soon { color: var(--warn); font-weight: 600; }
+.tbl .late { color: var(--danger); font-weight: 600; }
+.warn-text { color: var(--warn); }
+.dot-status { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; white-space: nowrap; }
+.dot-status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.dot-status.danger::before { background: var(--danger); }
+.dot-status.accent::before { background: var(--accent); }
+.dot-status.off::before { background: var(--text-3); }
+.tbl-actions { white-space: nowrap; text-align: right; }
+.tbl-actions > * + * { margin-left: 4px; }
+.icon-btn.sm { width: 32px; height: 32px; border-radius: 10px; box-shadow: none; background: transparent; display: inline-grid; vertical-align: middle; }
+.icon-btn.sm:hover { background: var(--surface); box-shadow: var(--shadow); }
+.icon-btn.danger { color: var(--danger); }
+
+/* Cards on desktop */
+.accounts-grid { display: flex; flex-direction: column; gap: 14px; }
+.desk .accounts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
+.desk .bank-card { min-height: 150px; }
+.tile.hero { background: var(--hero); color: #fff; }
+.tbl td.num:nth-child(2) > div:first-child { white-space: nowrap; }
+@media (max-width: 1240px) { .tbl .col-year { display: none; } }
+.desk-main form.card { max-width: 560px; }

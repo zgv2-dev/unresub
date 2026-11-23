@@ -1,6 +1,6 @@
 import { formatMoney, LOCAL_CURRENCY } from '@unresub/core';
 import type { SubscriptionItem, SubscriptionsResponse } from '../api.ts';
-import { splitMoney } from '../format.ts';
+import { fmtDate, relative, splitMoney } from '../format.ts';
 
 const CATEGORY: Record<string, { label: string; color: string }> = {
   ai: { label: 'AI', color: '#ffffff' },
@@ -56,6 +56,58 @@ export const Summary = ({ totals, items }: { totals: SubscriptionsResponse['tota
           </div>
         </>
       )}
+    </section>
+  );
+};
+
+/** Desktop: the same numbers as a row of tiles. */
+export const SummaryTiles = ({ totals, items }: { totals: SubscriptionsResponse['totals']; items: SubscriptionItem[] }) => {
+  const { whole, cents } = splitMoney(totals.monthlyLocal, LOCAL_CURRENCY);
+  const byCat = new Map<string, number>();
+  for (const i of items) byCat.set(i.category ?? 'other', (byCat.get(i.category ?? 'other') ?? 0) + i.monthlyLocal);
+  const parts = [...byCat].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  const sum = parts.reduce((s, [, v]) => s + v, 0);
+  const next = items.toSorted((a, b) => a.nextChargeAt - b.nextChargeAt)[0];
+  return (
+    <section className="tiles">
+      <div className="tile hero">
+        <div className="hero-label">Spending per month</div>
+        <div className="hero-amount num">
+          {whole}
+          <span className="cents">{cents}</span>
+        </div>
+        {sum > 0 && (
+          <>
+            <div className="spend-bar" aria-hidden>
+              {parts.map(([c, v]) => <i key={c} style={{ width: `${(v / sum) * 100}%`, background: cat(c).color }} />)}
+            </div>
+            <div className="legend">
+              {parts.slice(0, 6).map(([c, v]) => (
+                <span key={c}>
+                  <b style={{ background: cat(c).color }} />
+                  {cat(c).label} {Math.round((v / sum) * 100)}%
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+      <div className="tile">
+        <span>Per year</span>
+        <strong className="num">{formatMoney(totals.annualLocal, LOCAL_CURRENCY)}</strong>
+        <em>{totals.count} active subscriptions</em>
+      </div>
+      <div className="tile">
+        <span>Next charge</span>
+        {next ? (
+          <>
+            <strong>{next.name}</strong>
+            <em className="num">{formatMoney(next.price, next.currency)} · {fmtDate(next.nextChargeAt)}, {relative(next.nextChargeAt)}</em>
+          </>
+        ) : (
+          <strong>—</strong>
+        )}
+      </div>
     </section>
   );
 };
