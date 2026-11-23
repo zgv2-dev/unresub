@@ -1,21 +1,37 @@
 import type { Alert, DetectionStatus, Period } from '@unresub/core';
 
-const TOKEN_KEY = 'unresub.apiToken';
-// Empty for the browser build (same origin). The Android build sets it to the server URL.
-const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
+const SERVER_KEY = 'unresub.server';
+const TOKEN_KEY = 'unresub.session';
 
-export const getApiToken = () => {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
+/** True inside the Android app (Capacitor WebView), where the server is remote and chosen at sign-in. */
+export const isNative = (() => {
+  const cap = (globalThis as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor;
+  return !!(cap?.isNativePlatform?.() ?? (cap?.getPlatform && cap.getPlatform() !== 'web'));
+})();
+
+const store = {
+  get: (k: string) => {
+    try {
+      return localStorage.getItem(k);
+    } catch {
+      return null;
+    }
+  },
+  set: (k: string, v: string | null) => {
+    try {
+      v ? localStorage.setItem(k, v) : localStorage.removeItem(k);
+    } catch {}
+  },
 };
-export const setApiToken = (t: string | null) => {
-  try {
-    t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
-  } catch {}
-};
+
+/** The browser build talks to its own origin; the app to the server URL the user typed (or a build-time default). */
+export const getServer = () => (isNative ? store.get(SERVER_KEY) ?? import.meta.env.VITE_API_BASE ?? '' : import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
+export const setServer = (url: string | null) => store.set(SERVER_KEY, url?.trim().replace(/\/$/, '') || null);
+
+// The app keeps a bearer token (cookies don't cross from the WebView's origin); the browser uses an httpOnly cookie plus a CSRF token.
+const getToken = () => (isNative ? store.get(TOKEN_KEY) : null);
+const setToken = (t: string | null) => isNative && store.set(TOKEN_KEY, t);
+let csrfToken: string | null = null;
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) {
@@ -24,15 +40,98 @@ export class ApiError extends Error {
 }
 
 const call = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-  const res = await fetch(`${API_BASE}/api${path}`, {
-    ...init,
-    headers: { Authorization: `Bearer ${getApiToken() ?? ''}`, 'Content-Type': 'application/json', ...init.headers },
-  });
+  const token = getToken();
+  let res: Response;
+  try {
+    res = await fetch(`${getServer()}/api${path}`, {
+      ...init,
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` }),
+        ...(csrfToken && { 'X-CSRF-Token': csrfToken }),
+        ...init.headers,
+      },
+    });
+  } catch {
+    throw new ApiError(0, isNative ? `Can't reach ${getServer() || 'the server'}` : "Can't reach the server");
+  }
   if (!res.ok) {
     const msg = await res.json().then(b => b.error ?? b.message, () => res.statusText).catch(() => res.statusText);
     throw new ApiError(res.status, msg || res.statusText);
   }
   return res.status === 204 ? (undefined as T) : res.json();
+};
+
+const send = <T>(method: string, path: string, body?: unknown) =>
+  call<T>(path, { method, ...(body !== undefined && { body: JSON.stringify(body) }) });
+
+export interface User {
+  id: string;
+  username: string;
+  isAdmin: boolean;
+  createdAt: number;
+}
+
+export interface AuthStatus {
+  setupRequired: boolean;
+  legacyData: boolean;
+  signup: 'invite' | 'open';
+  user: User | null;
+  csrfToken: string | null;
+}
+
+interface SignedIn {
+  user: User;
+  csrfToken: string | null;
+  token?: string;
+}
+
+const client = isNative ? 'app' : 'web';
+const signedIn = (r: SignedIn) => {
+  csrfToken = r.csrfToken;
+  if (r.token) setToken(r.token);
+  return r.user;
+};
+
+export const auth = {
+  status: async () => {
+    const s = await call<AuthStatus>('/auth/status');
+    csrfToken = s.csrfToken;
+    return s;
+  },
+  setup: (b: { username: string; password: string; setupCode: string }) => send<SignedIn>('POST', '/auth/setup', { ...b, client }).then(signedIn),
+  login: (b: { username: string; password: string }) => send<SignedIn>('POST', '/auth/login', { ...b, client }).then(signedIn),
+  signup: (b: { username: string; password: string; invite?: string }) => send<SignedIn>('POST', '/auth/signup', { ...b, client }).then(signedIn),
+  logout: async () => {
+    await send<void>('POST', '/auth/logout').catch(() => {});
+    csrfToken = null;
+    setToken(null);
+  },
+  /** Forget a session the server no longer accepts. */
+  forget: () => ((csrfToken = null), setToken(null)),
+  changePassword: (current: string, next: string) => send<void>('POST', '/me/password', { current, next }),
+  deleteAccount: (password: string) => send<void>('DELETE', '/me', { password }).then(() => setToken(null)),
+  exportData: () => call<unknown>('/me/export'),
+};
+
+export interface Invite {
+  id: number;
+  createdAt: number;
+  expiresAt: number;
+  usedAt: number | null;
+  usedBy: string | null;
+}
+
+export const admin = {
+  users: () => call<User[]>('/admin/users'),
+  setAdmin: (id: string, isAdmin: boolean) => send<User>('PATCH', `/admin/users/${id}`, { isAdmin }),
+  deleteUser: (id: string) => send<void>('DELETE', `/admin/users/${id}`),
+  invites: () => call<Invite[]>('/admin/invites'),
+  createInvite: () => send<{ code: string; expiresAt: number }>('POST', '/admin/invites', {}),
+  deleteInvite: (id: number) => send<void>('DELETE', `/admin/invites/${id}`),
+  settings: () => call<{ signup: 'invite' | 'open' }>('/admin/settings'),
+  setSignup: (signup: 'invite' | 'open') => send<{ signup: 'invite' | 'open' }>('PUT', '/admin/settings', { signup }),
 };
 
 export interface SubscriptionItem {

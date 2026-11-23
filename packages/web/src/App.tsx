@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { formatMoney, LOCAL_CURRENCY } from '@unresub/core';
-import { api, ApiError, getApiToken, setApiToken, type Account, type CatalogEntry, type TransactionRow, type Source, type SubscriptionItem, type SubscriptionsResponse } from './api.ts';
+import { api, ApiError, auth, type Account, type AuthStatus, type User, type CatalogEntry, type TransactionRow, type Source, type SubscriptionItem, type SubscriptionsResponse } from './api.ts';
 import { daysUntil } from './format.ts';
 import { useTheme } from './theme.ts';
+import { AccountSheet } from './components/AccountSheet.tsx';
 import { AlertBanner } from './components/AlertBanner.tsx';
 import { CardsTab } from './components/CardsTab.tsx';
 import { Icon, type IconName } from './components/Icon.tsx';
@@ -19,11 +20,25 @@ import { TransactionsTab } from './components/TransactionsTab.tsx';
 type Tab = 'subs' | 'tx' | 'cards';
 
 export const App = () => {
-  const [authed, setAuthed] = useState(!!getApiToken());
-  return authed ? <Dashboard onLogout={() => (setApiToken(null), setAuthed(false))} /> : <Login onDone={() => setAuthed(true)} />;
+  // undefined: loading; null: server unreachable.
+  const [status, setStatus] = useState<AuthStatus | null | undefined>(undefined);
+  const refresh = useCallback(() => auth.status().then(setStatus, () => setStatus(null)), []);
+  useEffect(() => void refresh(), [refresh]);
+
+  const user = status?.user;
+  if (status === undefined) return <main className="login" aria-busy><Logo size={28} /></main>;
+  if (!user) {
+    return <Login key={String(status?.setupRequired)} status={status} onDone={u => setStatus(s => s && { ...s, setupRequired: false, user: u })} onServerChange={() => void refresh()} />;
+  }
+  const signOut = async (server = true) => {
+    await (server ? auth.logout() : auth.forget());
+    void refresh();
+  };
+  return <Dashboard user={user} onLogout={() => void signOut()} onExpired={() => void signOut(false)} />;
 };
 
-const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
+const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => void; onExpired: () => void }) => {
+  const [accountOpen, setAccountOpen] = useState(false);
   const [data, setData] = useState<SubscriptionsResponse | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -45,10 +60,10 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
       setAccounts(accs);
       setError(null);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) return onLogout();
+      if (e instanceof ApiError && e.status === 401) return onExpired();
       setError((e as Error).message);
     }
-  }, [onLogout]);
+  }, [onExpired]);
 
   useEffect(() => {
     void load();
@@ -129,7 +144,7 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
     { id: 'tx', label: 'Transactions', icon: 'receipt' },
     { id: 'cards', label: 'Cards', icon: 'card', dot: lowBalance ? 'var(--danger)' : syncing ? 'var(--accent)' : undefined },
   ];
-  const owner = sources[0]?.name.split('·').at(-1)?.trim() ?? 'UnReSub';
+  const owner = user.username;
 
   return (
     <div className={desktop ? 'desk' : 'app'}>
@@ -145,9 +160,9 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
                 {syncing && <span className="pill accent"><Icon name="refresh" size={14} /> Syncing</span>}
                 {themeBtn}
                 <span className="vsep" />
-                <button className="avatar" onClick={onLogout} title="Log out" aria-label="Log out">
+                <button className="avatar" onClick={() => setAccountOpen(true)} title="Account" aria-label="Account">
                   {initials(owner)}
-                  <span className="avatar-hover"><Icon name="logout" size={16} /></span>
+                  <span className="avatar-hover"><Icon name="user" size={16} /></span>
                 </button>
               </div>
             </div>
@@ -158,7 +173,7 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
                 <span className="avatar static">{initials(owner)}</span>
                 <div>
                   <strong>{owner}</strong>
-                  <span className="xs muted">Subscriptions cabinet</span>
+                  <span className="xs muted">{user.isAdmin ? 'Admin' : 'Subscriptions cabinet'}</span>
                 </div>
               </div>
               <nav className="side-nav">
@@ -197,8 +212,8 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
             </div>
             <div className="topbar-actions">
               {themeBtn}
-              <button className="icon-btn" onClick={onLogout} aria-label="Log out" title="Log out">
-                <Icon name="logout" />
+              <button className="icon-btn" onClick={() => setAccountOpen(true)} aria-label="Account" title="Account">
+                <Icon name="user" />
               </button>
             </div>
           </header>
@@ -238,6 +253,8 @@ const Dashboard = ({ onLogout }: { onLogout: () => void }) => {
           onCreated={key => (setTxn(null), setTxVersion(v => v + 1), void load().then(() => setOpenKey(key)))}
         />
       )}
+
+      {accountOpen && <AccountSheet user={user} onClose={() => setAccountOpen(false)} onLogout={onLogout} />}
 
       {toast && (
         <div className="toast" role="status">

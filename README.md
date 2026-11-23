@@ -11,79 +11,32 @@ monobank only. Use a monobank USD/EUR card as the dedicated subscriptions card. 
 - `packages/web`: React + Vite UI.
 - `packages/mobile`: Android app. Capacitor wraps the web UI; native pieces (reminder notifications, bank notification parsing) go into `android/`.
 
-## Run
+## Self-hosting
+
+UnReSub is a self-hosted app: one server, many people, each with their own login and their own monobank data. Run the published image:
+
+```sh
+docker run -d -p 8787:8787 -v unresub-data:/data ghcr.io/zgv2-dev/unresub:latest
+docker logs <container>   # shows the first-run setup code
+```
+
+Full guide (Compose, https, webhooks, backups, updating, Railway, moving from the single-user version): [docs/self-hosting.md](docs/self-hosting.md).
+
+## Develop
 
 ```sh
 pnpm install
-cp .env.example .env   # fill UNRESUB_SECRET_KEY and UNRESUB_API_TOKEN
-pnpm seed:demo         # optional: fake data, no bank token needed
-pnpm dev               # API on :8787, UI on :5173
+pnpm dev               # API on :8787 (data in packages/server/data), UI on :5173
+pnpm seed:demo [user]  # optional: fake bank data for an account you created
+pnpm test
 ```
 
-Production without Docker: `pnpm --filter @unresub/web build && pnpm --filter @unresub/server build && pnpm --filter @unresub/server start:prod` (the server serves the built UI). With Docker: `docker build -t unresub . && docker run -p 8787:8787 -v unresub-data:/data --env-file .env unresub`.
+No `.env` is needed; see `.env.example` for the optional settings.
 
-Connect monobank in the UI with a personal token from https://api.monobank.ua.
+### Maintainer notes
 
-## Hosting on Railway
-
-The server must run all the time (scheduled sync, monobank webhooks) and keep its SQLite file on a persistent disk. Railway builds the `Dockerfile` using `railway.json` (health check on `/healthz`, restart on failure), gives you a free `https://….up.railway.app` address, and redeploys on every push to `main`.
-
-Cost (not verified, check https://railway.com/pricing): there is a one-time trial credit, then the Hobby plan is about $5/month including $5 of usage, which should cover this small server. Railway may ask for a card to leave the trial.
-
-One-time setup:
-
-1. **Make two secrets** on your computer and save them in a password manager. Losing `UNRESUB_SECRET_KEY` means re-entering the monobank token.
-   ```sh
-   openssl rand -base64 32   # UNRESUB_SECRET_KEY
-   openssl rand -hex 24      # UNRESUB_API_TOKEN (you type this into the web UI and the app)
-   ```
-2. **Create the project.** Sign in at https://railway.com with GitHub → **New Project** → **Deploy from GitHub repo** → pick `zgv2-dev/unresub` (allow the Railway GitHub app access to it if asked).
-
-   Railway sees the pnpm workspace and offers **four services** (`@unresub/web`, `@unresub/core`, `@unresub/server`, `@unresub/mobile`). You need **only one**: the server image already contains the web UI, `core` is a library, and `mobile` is built by GitHub Actions. Before pressing **Deploy**:
-   - Delete `@unresub/web`, `@unresub/core` and `@unresub/mobile`: tap each → **Settings** → bottom of the page → **Delete service**.
-   - Open `@unresub/server` → **Settings** and fix what Railway pre-filled for the package folder:
-     - **Source → Root Directory**: empty (repo root), not `packages/server`, if your Railway shows this field. Some accounts don't show it; then the next setting is enough.
-     - **Build → Builder**: `Dockerfile`, **Dockerfile path** `/Dockerfile` (`railway.json` sets these too). Clear any custom build or start command.
-     - **Watch Paths**: empty (`railway.json` provides them).
-     - Optional: rename the service to `unresub`.
-   - Do steps 3 and 4 below, then press **Deploy**.
-
-   If it gets messy: ⋮ next to Deploy → discard the changes, then **Create → Empty Service** → its **Settings → Source → Connect Repo** → `zgv2-dev/unresub`, root directory empty.
-3. **Add a volume** to that one service. On a computer: right-click the service on the canvas → **Attach volume**. On a phone: **Create** (or `Ctrl/⌘ K`) → **Volume** → choose the service. Mount path `/data`. The database lives at `/data/unresub.db`.
-4. **Set variables.** Service → **Variables**:
-   - `UNRESUB_SECRET_KEY`, `UNRESUB_API_TOKEN`: from step 1
-   - `PORT` = `8787`
-   - optional: `SYNC_INTERVAL_HOURS` (default 6), `BACKFILL_MONTHS` (default 12)
-   - `DB_PATH`: don't set it, or set it to `/data/unresub.db`. Anything else (like `./unresub.db`) puts the database outside the volume and it's wiped on every deploy.
-
-   Railway may suggest variables from `.env.example`; accept the two secrets and skip the rest.
-5. **Get a public address.** Service → **Settings** → **Networking** → **Generate Domain**, target port `8787`. You get something like `https://unresub-production.up.railway.app`.
-   Own domain instead: **Networking** → **Custom Domain** → e.g. `unresub.example.com`, port `8787`, then add the CNAME record Railway shows at your DNS provider. Railway issues the https certificate once DNS resolves.
-6. **Turn on webhooks.** Add the variable `PUBLIC_URL` = that https address. Railway redeploys. The deploy is healthy when **Deployments** shows it as active; `https://<your address>/healthz` answers `ok`.
-7. **Use it.** Open the address, enter `UNRESUB_API_TOKEN`, then connect monobank with a token from https://api.monobank.ua.
-8. **Point the Android app at it.** GitHub repo → Settings → Secrets and variables → Actions → **Variables** → `UNRESUB_API_URL` = the same https address. Then Actions → Android → **Run workflow** to build an APK that talks to your server.
-
-After that, every push to `main` that touches the server, web UI or `Dockerfile` redeploys (see `watchPatterns` in `railway.json`). Pushes that only change the Android app don't. Keep the service at one replica: SQLite on a volume can't be shared.
-
-### Fallback: Fly.io
-
-Same image, also needs a card. Install `flyctl`, then:
-
-```sh
-fly launch --no-deploy                       # uses the Dockerfile; say no to databases
-fly volumes create unresub_data --size 1 --region waw
-fly secrets set UNRESUB_SECRET_KEY=… UNRESUB_API_TOKEN=… PUBLIC_URL=https://<app>.fly.dev
-```
-
-In the generated `fly.toml`, set `internal_port = 8787`, `auto_stop_machines = "off"`, `min_machines_running = 1` under `[http_service]`, and add:
-
-```toml
-[mounts]
-  source = "unresub_data"
-  destination = "/data"
-```
-
-Then `fly deploy`. Use `https://<app>.fly.dev` as `UNRESUB_API_URL`.
+- `.github/workflows/docker.yml` publishes `ghcr.io/zgv2-dev/unresub` on every push to `main` (`latest`) and on `v*.*.*` tags (semver). After the first run, make the package public once: GitHub → your profile → Packages → `unresub` → Package settings → Change visibility.
+- The maintainer's own instance runs on Railway from this repo (`railway.json`), redeploying on each push to `main`.
 
 ## Android app
 
@@ -91,27 +44,30 @@ CI (`.github/workflows/android.yml`) builds on every push to `main`, on PRs and 
 
 One-time setup in GitHub repo settings:
 
-1. **Variable** `UNRESUB_API_URL` (Settings → Secrets and variables → Actions → Variables): https URL of your server, e.g. `https://unresub-production.up.railway.app` (see [Hosting on Railway](#hosting-on-railway)). Android blocks plain http. The server already allows CORS from the app.
-2. **Secrets** for a signed release (optional; debug builds work without them):
+The app asks for the server address on first start, so one APK works with any UnReSub server. Optionally set the repo **variable** `UNRESUB_API_URL` to prefill it.
+
+1. **Secrets** for a signed release (optional; debug builds work without them):
    ```sh
    keytool -genkeypair -v -keystore unresub.jks -alias unresub -keyalg RSA -keysize 4096 -validity 10000
    base64 -w0 unresub.jks   # macOS: base64 -i unresub.jks
    ```
    Add `ANDROID_KEYSTORE_BASE64` (the base64 output), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`unresub`), `ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe: updates must be signed with the same key.
 
-Local build (needs Android SDK + JDK 21): `cd packages/mobile && VITE_API_BASE=https://… pnpm sync && cd android && ./gradlew assembleDebug`.
+Local build (needs Android SDK + JDK 21): `cd packages/mobile && pnpm sync && cd android && ./gradlew assembleDebug`.
 
 ## How sync works
 
 - monobank allows 1 statement request per minute and 31 days per request, so the first backfill of `BACKFILL_MONTHS` (default 12) takes about one minute per month per account. Newest windows load first.
-- Incremental sync runs every `SYNC_INTERVAL_HOURS` (default 6).
+- Incremental sync runs every `SYNC_INTERVAL_HOURS` (default 6). Every connected token syncs on its own with its own rate limiter, so one person's long backfill never delays another's.
 - If `PUBLIC_URL` is set (https), a webhook is registered at `/hooks/<sourceId>/<secret>` and new transactions arrive instantly.
 
 ## Security
 
-- Bank tokens are encrypted with AES-256-GCM (`UNRESUB_SECRET_KEY`), bound to their row id, and never returned by the API or logged.
-- The API requires `Authorization: Bearer $UNRESUB_API_TOKEN`.
-- The webhook URL carries a random secret, compared in constant time.
+- Accounts with scrypt-hashed passwords; browser sessions are httpOnly cookies with a CSRF token, the app uses a bearer session token. Only token hashes are stored.
+- Each user has their own SQLite file (`users/<id>.db`) and their own data key, wrapped by the instance key (`UNRESUB_SECRET_KEY` or the generated `secret.key`). Bank tokens are encrypted with the user's key (AES-256-GCM), bound to their row id, and never returned by the API or logged.
+- Admins manage accounts, not data: there is no endpoint that reads another user's database.
+- The webhook URL carries a random secret, compared in constant time, and routes to exactly one user.
+- Tests in `packages/server/src/auth.test.ts` check that one user can't read or change another's data through any endpoint.
 
 ## Detection
 

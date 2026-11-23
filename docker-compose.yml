@@ -1,0 +1,21 @@
+# UnReSub, self-hosted. Quick start:
+#   docker compose up -d && docker compose logs unresub   # the log shows the first-run setup code
+# Then open http://localhost:8787 (or your domain) and create the admin account.
+# See docs/self-hosting.md for https, webhooks, backups and updates.
+services:
+  unresub:
+    image: ghcr.io/zgv2-dev/unresub:latest
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - unresub-data:/data
+    environment:
+      # Public https address of this server. Needed for instant monobank webhooks;
+      # without it, transactions arrive on the scheduled sync only.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      # Optional: SYNC_INTERVAL_HOURS (6), BACKFILL_MONTHS (12), SESSION_DAYS (30)
+      # Optional: UNRESUB_SECRET_KEY to supply the instance key yourself (otherwise /data/secret.key)
+
+volumes:
+  unresub-data:
