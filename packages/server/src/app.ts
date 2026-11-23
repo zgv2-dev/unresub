@@ -88,6 +88,8 @@ export const createApp = (db: Db, sync: SyncService, apiToken: string) => {
     return c.json({ error: 'Internal error' }, 500);
   });
 
+  app.get('/healthz', c => c.text('ok'));
+
   // --- Webhooks (public, authenticated by the secret in the path) ---
   // monobank verifies the URL with a GET before enabling it.
   app.get('/hooks/:sourceId/:secret', c => {

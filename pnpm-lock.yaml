@@ -47,6 +47,10 @@ importers:
       hono:
         specifier: ^4.13.21
         version: 4.13.21
+    devDependencies:
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
 
   packages/web:
     dependencies:

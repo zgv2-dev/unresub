@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env --import tsx --watch src/index.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.mjs",
     "start": "node --env-file-if-exists=../../.env --import tsx src/index.ts",
+    "start:prod": "node dist/index.mjs",
     "seed:demo": "node --env-file-if-exists=../../.env --import tsx src/seed-demo.ts",
     "typecheck": "tsc -p ."
   },
@@ -12,5 +14,8 @@
     "@hono/node-server": "^2.1.11",
     "@unresub/core": "workspace:*",
     "hono": "^4.13.21"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }
