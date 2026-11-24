@@ -139,7 +139,19 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
     void load();
   };
 
-  const open = data?.items.find(i => i.key === openKey) ?? null;
+  // A key from a transaction can be older than the list (a series merged or moved cards since).
+  const matches = (key: string | null) => (i: SubscriptionItem) => i.key === key || i.merged.some(m => m.key === key);
+  const open = (openKey && data?.items.find(matches(openKey))) || null;
+  const openSubscription = (key: string) => {
+    setTxn(null);
+    setOpenKey(key);
+    if (data?.items.some(matches(key))) return;
+    // Not in the list yet (a charge that just arrived): reload, the sheet opens once it is there.
+    api.subscriptions().then(
+      subs => (setData(subs), !subs.items.some(matches(key)) && setError('That subscription is no longer in the list.')),
+      e => setError((e as Error).message),
+    );
+  };
   // Largest shortfall per card (alerts are cumulative, so the last one wins).
   const shortfall = new Map(data?.alerts.flatMap(a => (a.type === 'low_balance' ? [[a.accountId, { amount: a.shortfall, currency: a.currency }] as const] : [])));
   const lowBalance = shortfall.size > 0;
@@ -281,7 +293,7 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
           account={accounts.find(a => a.id === txn.accountId)}
           catalog={catalog}
           onClose={() => setTxn(null)}
-          onOpenSubscription={key => (setTxn(null), setOpenKey(key))}
+          onOpenSubscription={openSubscription}
           onCreated={key => (setTxn(null), setTxVersion(v => v + 1), void load().then(() => setOpenKey(key)))}
         />
       )}

@@ -71,6 +71,11 @@ const lifecycleOf = (
   return { lifecycle: 'active', archivedBy: null, archivedAt: null };
 };
 
+/** A key from an older view can belong to a series that has since been merged into another one. */
+const findSubscription = <T extends { key: string; mergedKeys: string[] }>(items: T[], key: string) =>
+  items.find(i => i.key === key) ?? items.find(i => i.mergedKeys.includes(key));
+const GONE = 'This subscription has changed since the list was loaded. Refresh and try again.';
+
 export const buildSubscriptionsView = (db: Db, sync: Pick<SyncService, 'toLocal' | 'convert'>, now = Math.floor(Date.now() / 1000)) => {
   const accounts = new Map(db.listAccounts().map(a => [a.id, a]));
   const hasSubCard = [...accounts.values()].some(a => a.is_subscription_card);
@@ -705,8 +710,8 @@ export const createApp = (deps: AppDeps) => {
   api.post('/subscriptions/:key/dismiss', c => {
     const { db, sync } = c.var.tenant;
     const key = c.req.param('key');
-    const item = buildSubscriptionsView(db, sync).items.find(i => i.key === key);
-    if (!item) throw new HTTPException(404);
+    const item = findSubscription(buildSubscriptionsView(db, sync).items, key);
+    if (!item) throw new HTTPException(404, { message: GONE });
     const batch = randomToken(8);
     const keys = [...new Set([key, ...item.mergedKeys])];
     const manuals = db.listManual().filter(m => keys.includes(m.key));
@@ -854,8 +859,8 @@ export const createApp = (deps: AppDeps) => {
   api.get('/subscriptions/:key/transactions', async c => {
     const { db, sync } = c.var.tenant;
     await sync.refreshRates();
-    const item = buildSubscriptionsView(db, sync).items.find(i => i.key === c.req.param('key'));
-    if (!item) throw new HTTPException(404);
+    const item = findSubscription(buildSubscriptionsView(db, sync).items, c.req.param('key'));
+    if (!item) throw new HTTPException(404, { message: GONE });
     const accounts = new Map(db.listAccounts().map(a => [a.id, a]));
     const ids = new Set(item.transactionIds);
     const chrono = db.listTransactions().filter(t => ids.has(t.id)).toSorted((a, b) => a.time - b.time);
@@ -901,7 +906,7 @@ export const createApp = (deps: AppDeps) => {
     const { db, sync } = c.var.tenant;
     const key = c.req.param('key');
     const { transactionId } = await c.req.json<{ transactionId: string }>();
-    const item = buildSubscriptionsView(db, sync).items.find(i => i.key === key);
+    const item = findSubscription(buildSubscriptionsView(db, sync).items, key);
     if (!item?.transactionIds.includes(transactionId)) throw new HTTPException(404, { message: 'Charge is not part of this subscription' });
     db.excludeTransaction(transactionId, key);
     const manual = db.listManual().find(m => m.transactionIds.includes(transactionId));
