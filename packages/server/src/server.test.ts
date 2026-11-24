@@ -88,6 +88,33 @@ describe('server', () => {
     expect(body.items[0]).toMatchObject({ serviceId: 'anthropic', price: 2_000, localPrice: 83_000, annual: 24_000, annualLocal: 996_000 });
   });
 
+  it('treats monobank "out of bounds" as the start of a card\'s history', async () => {
+    const id = seedSource(db);
+    const now = Math.floor(Date.now() / 1000);
+    const opened = now - 45 * 86_400;
+    let calls = 0;
+    const fake: BankSource = {
+      kind: 'monobank',
+      maxRangeSeconds: 31 * 86_400,
+      listAccounts: async () => [],
+      fetchTransactions: async (_ext, _from, to) => {
+        calls++;
+        if (to < opened) throw Object.assign(new Error(`monobank /personal/statement → 400 {"errorDescription":"Value field 'to' out of bounds"}`), { status: 400 });
+        return [];
+      },
+    };
+    await sync.syncSource(id, fake);
+    expect(sync.status(id)).toMatchObject({ running: false, lastError: null });
+    const sources = (await (await app.request('/api/sources', { headers: auth })).json()) as any;
+    expect(sources[0].progress[0]).toMatchObject({ state: 'done' });
+
+    // Next run doesn't ask for the old windows again.
+    const before = calls;
+    await sync.syncSource(id, fake);
+    expect(sync.status(id).lastError).toBeNull();
+    expect(calls - before).toBeLessThanOrEqual(1);
+  });
+
   it('accepts monobank webhooks only with the right secret', async () => {
     const id = seedSource(db);
     const payload = {

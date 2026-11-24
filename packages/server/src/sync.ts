@@ -179,18 +179,36 @@ export class SyncService {
       status.total = plan.length;
       for (const p of plan) status.remainingByAccount[p.accountId] = (status.remainingByAccount[p.accountId] ?? 0) + 1;
 
+      // Accounts whose history monobank says has run out: their older windows are skipped.
+      const ended = new Set<string>();
+      const advance = (p: Chunk) => (status.done++, status.remainingByAccount[p.accountId]!--);
       for (const p of plan) {
+        if (ended.has(p.accountId)) {
+          advance(p);
+          continue;
+        }
         Object.assign(status, { phase: p.phase, currentAccountId: p.accountId, nextRequestAt: src.nextRequestAt?.() ?? null });
-        const txns = await this.#fetchWithRetry(src, p, status);
+        const range = `${new Date(p.from * 1000).toISOString().slice(0, 10)}..${new Date(p.to * 1000).toISOString().slice(0, 10)}`;
+        let txns: Awaited<ReturnType<BankSource['fetchTransactions']>>;
+        try {
+          txns = await this.#fetchWithRetry(src, p, status);
+        } catch (e) {
+          if (p.phase !== 'backfill' || !isOutOfRange(e)) throw e;
+          // monobank keeps a limited history (and none before the card was opened): this is the start.
+          this.db.markProgress(p.accountId, horizon, p.to);
+          ended.add(p.accountId);
+          advance(p);
+          this.#log(`${sourceId} backfill ${range}: no older history, done for this card`);
+          continue;
+        }
         this.db.insertTransactions(p.accountId, txns);
         this.db.markProgress(p.accountId, p.from, p.to);
-        status.done++;
-        status.remainingByAccount[p.accountId]!--;
-        this.#log(`${sourceId} ${p.phase} ${new Date(p.from * 1000).toISOString().slice(0, 10)}..${new Date(p.to * 1000).toISOString().slice(0, 10)}: ${txns.length} txns (${status.done}/${status.total})`);
+        advance(p);
+        this.#log(`${sourceId} ${p.phase} ${range}: ${txns.length} txns (${status.done}/${status.total})`);
       }
     } catch (e) {
-      status.lastError = (e as Error).message;
-      this.#log(`${sourceId} failed: ${status.lastError}`);
+      this.#log(`${sourceId} failed: ${(e as Error).message}`);
+      status.lastError = friendlyError(e);
     } finally {
       Object.assign(status, { running: false, phase: 'idle', currentAccountId: null, retrying: false, lastFinishedAt: nowS() });
     }
@@ -306,3 +324,16 @@ export class SyncService {
     return () => clearInterval(timer);
   }
 }
+
+/** monobank's 400 for a statement window outside the history it keeps ("Value field 'to' out of bounds"). */
+const isOutOfRange = (e: unknown) => (e as { status?: number }).status === 400 && /out of bounds/i.test((e as Error).message);
+
+/** What the Cards tab shows: plain words instead of the raw bank response. */
+export const friendlyError = (e: unknown) => {
+  const status = (e as { status?: number }).status;
+  if (status === 401 || status === 403) return 'monobank rejected the token. Add a new one from api.monobank.ua.';
+  if (status === 429) return 'monobank is rate limiting requests. Sync will try again later.';
+  if (isOutOfRange(e)) return 'monobank refused the requested dates. Sync will try again later.';
+  if (status && status >= 500) return 'monobank is not responding right now. Sync will try again later.';
+  return (e as Error).message;
+};
