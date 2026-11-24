@@ -2,6 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
+/** Signing certificate of the official Android app (GitHub Releases). Public, not a secret. */
+const OFFICIAL_APP_CERT = 'E1:B1:82:4B:A5:63:35:64:3A:53:B7:B6:9C:56:55:C6:2F:B0:F1:B4:A6:B7:36:29:69:86:EA:13:85:A8:AA:15';
+
 const num = (v: string | undefined, d: number) => (v && Number.isFinite(Number(v)) ? Number(v) : d);
 
 // DATA_DIR holds everything: core.db, users/<id>.db, secret.key. Older setups only set DB_PATH
@@ -22,8 +25,11 @@ export const env = {
   sessionDays: num(process.env.SESSION_DAYS, 30),
   /** Android app allowed to use passkeys for this domain (served in /.well-known/assetlinks.json). */
   androidPackage: process.env.UNRESUB_ANDROID_PACKAGE || 'dev.unresub.app',
-  /** SHA-256 signing-certificate fingerprints of that app, comma-separated (AB:CD:...). Empty: the app can't use passkeys here. */
-  androidCertFingerprints: (process.env.UNRESUB_ANDROID_CERT_SHA256 ?? '').split(',').map(s => s.trim()).filter(Boolean),
+  /**
+   * SHA-256 signing-certificate fingerprints of that app, comma-separated (AB:CD:...). Defaults to the
+   * official APK from github.com/zgv2-dev/unresub releases; set it to '' to turn the app off, or to your own build's key.
+   */
+  androidCertFingerprints: (process.env.UNRESUB_ANDROID_CERT_SHA256 ?? OFFICIAL_APP_CERT).split(',').map(s => s.trim()).filter(Boolean),
 };
 
 /**

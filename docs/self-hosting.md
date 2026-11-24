@@ -30,7 +30,7 @@ Nothing is required. All variables are optional:
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `PUBLIC_URL` | none | Public https address, e.g. `https://unresub.example.com`. Its host is the passkey domain, and it turns on monobank webhooks. Set it before anyone creates a passkey: passkeys are tied to this domain. |
-| `UNRESUB_ANDROID_CERT_SHA256` | none | Signing-certificate fingerprint of the Android app allowed to use passkeys here (comma-separate several). Published in `/.well-known/assetlinks.json`. See [Android app](#android-app). |
+| `UNRESUB_ANDROID_CERT_SHA256` | official app | Signing-certificate fingerprint of the Android app allowed to use passkeys here (comma-separate several). Published in `/.well-known/assetlinks.json`. See [Android app](#android-app). |
 | `UNRESUB_ANDROID_PACKAGE` | `dev.unresub.app` | Package name for `assetlinks.json`, if you build the app under another id. |
 | `PORT` | `8787` | Port the server listens on. |
 | `DATA_DIR` | `/data` in Docker | Where all data lives. |
@@ -129,7 +129,7 @@ Install the APK from the repository's [latest release](https://github.com/zgv2-d
 
 The app creates and uses passkeys through Android's Credential Manager, which only allows it for a domain that vouches for the app. Your server does that by serving `/.well-known/assetlinks.json`, built from `UNRESUB_ANDROID_CERT_SHA256`:
 
-- **Using the official APK:** set `UNRESUB_ANDROID_CERT_SHA256` to the fingerprint printed in the release notes and the build summary of the [Android workflow](https://github.com/zgv2-dev/unresub/actions/workflows/android.yml).
+- **Using the official APK:** nothing to do. The server lists the official app's certificate by default (`E1:B1:82:4B:…:AA:15`).
 - **Building your own APK:** sign it with your own key (see the README) and set its fingerprint instead.
 - Check it: `https://<your server>/.well-known/assetlinks.json` must show the fingerprint. Android caches this file, so after a change, clear the Google Play services cache or wait a day.
 
