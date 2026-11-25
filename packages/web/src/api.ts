@@ -109,18 +109,16 @@ const NativePasskey = registerPlugin<{
   get(o: { requestJson: string }): Promise<{ responseJson: string }>;
 }>('Passkey');
 
-// The app's WebView ignores <a download> with blob URLs, so it saves through the system picker (SaveFilePlugin).
+// The app's WebView ignores <a download> with blob URLs, so it writes to Downloads natively (SaveFilePlugin).
 const NativeSaveFile = registerPlugin<{
-  save(o: { name: string; mime: string; text: string }): Promise<{ saved: boolean; bytes?: number }>;
+  save(o: { name: string; mime: string; text: string }): Promise<{ saved: boolean; bytes: number; location: string }>;
 }>('SaveFile');
 
-/** Saves text as a file: a download in the browser, the "Save as" picker in the app. False if cancelled. */
+/** Saves text as a file: a download in the browser, Downloads in the app. Returns where it went. */
 export const saveFile = async (name: string, text: string, mime = 'text/plain') => {
   if (isNative) {
     try {
-      const r = await NativeSaveFile.save({ name, mime, text });
-      if (r.saved && r.bytes === 0) throw new Error('The file was saved empty. Try another folder.');
-      return r.saved;
+      return (await NativeSaveFile.save({ name, mime, text })).location;
     } catch (e) {
       if ((e as { code?: string }).code === 'UNIMPLEMENTED') throw new Error('Update the app to save files.');
       throw e;
@@ -132,7 +130,7 @@ export const saveFile = async (name: string, text: string, mime = 'text/plain') 
   a.remove();
   // Revoking right away cancels the download in some browsers.
   setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-  return true;
+  return 'Downloads';
 };
 
 const passkeyError = (e: unknown) => {

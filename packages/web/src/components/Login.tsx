@@ -213,7 +213,7 @@ export const RecoveryCodes = ({ codes, onDone }: { codes: string[]; onDone: () =
   const text = `UnReSub recovery codes (${getServer() || location.origin})\nEach works once.\n\n${codes.join('\n')}\n`;
   const [err, setErr] = useState<string | null>(null);
   const download = () =>
-    void saveFile('unresub-recovery-codes.txt', text).then(ok => ok && setSaved(true), e => setErr((e as Error).message));
+    void saveFile('unresub-recovery-codes.txt', text).then(() => setSaved(true), e => setErr((e as Error).message));
   return (
     <Shell>
       <div className="card pad stack">
