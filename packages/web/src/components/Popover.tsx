@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useMedia } from '../hooks.ts';
+import { useBackToClose } from '../nav.ts';
 
 type Props = {
   anchor: RefObject<HTMLElement | null>;
@@ -21,6 +22,7 @@ type Props = {
  */
 export const Popover = ({ anchor, onClose, onEscape, title, width = 'anchor', fixed, children }: Props) => {
   const phone = useMedia('(max-width: 639px)');
+  useBackToClose(onEscape ?? onClose);
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number; maxHeight: number } | null>(null);
 
   useLayoutEffect(() => {

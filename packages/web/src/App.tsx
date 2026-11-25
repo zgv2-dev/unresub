@@ -9,6 +9,7 @@ import { CardsTab } from './components/CardsTab.tsx';
 import { Icon, type IconName } from './components/Icon.tsx';
 import { SubscriptionsTable } from './components/SubscriptionsTable.tsx';
 import { useMedia } from './hooks.ts';
+import { useScreen } from './nav.ts';
 import { Enrol, Login, Logo, RecoveryCodes } from './components/Login.tsx';
 import { DayStrip, Summary } from './components/Summary.tsx';
 import { SubscriptionRow } from './components/SubscriptionRow.tsx';
@@ -19,6 +20,8 @@ import { TransactionsTab } from './components/TransactionsTab.tsx';
 import { Toast } from './components/Toast.tsx';
 
 type Tab = 'subs' | 'tx' | 'cards';
+/** Screen keys nested under a tab, cleared when the tab changes. */
+const TAB_RESETS = ['view'];
 
 export const App = () => {
   // undefined: loading; null: server unreachable.
@@ -59,7 +62,7 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [txn, setTxn] = useState<TransactionRow | null>(null);
   const [txVersion, setTxVersion] = useState(0);
-  const [tab, setTab] = useState<Tab>('subs');
+  const [tab, setTab] = useScreen<Tab>('tab', 'subs', TAB_RESETS);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ text: string; undo: () => Promise<unknown> } | null>(null);
   const theme = useTheme();
@@ -325,7 +328,7 @@ type SubsProps = {
 type SubsView = 'active' | 'inactive' | 'archived';
 
 const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide, onArchive, onRestore }: SubsProps & { data: SubscriptionsResponse }) => {
-  const [view, setView] = useState<SubsView>('active');
+  const [view, setView] = useScreen<SubsView>('view', 'active');
   useEffect(() => {
     scrollTo({ top: 0 });
   }, [view]);
