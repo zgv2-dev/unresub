@@ -5,7 +5,7 @@ import { daysUntil, fmtDate, PERIOD_SHORT, relative } from '../format.ts';
 import { AlertBanner } from './AlertBanner.tsx';
 import { Icon } from './Icon.tsx';
 import { ServiceIcon } from './ServiceIcon.tsx';
-import { SummaryTiles } from './Summary.tsx';
+import { SummaryTiles, Timeline } from './Summary.tsx';
 import { SyncProgress } from './SyncProgress.tsx';
 
 type View = 'active' | 'inactive' | 'archived';
@@ -72,6 +72,7 @@ export const SubscriptionsTable = ({ data, sources, onOpen, onOpenCards, onHide,
         </div>
       )}
       <SummaryTiles totals={data.totals} items={live} />
+      <Timeline items={live} onOpen={onOpen} />
 
       <div className="tabs" role="tablist">
         {([['active', 'Active', live.length], ['inactive', 'Inactive', inactive.length], ['archived', 'Archived', archived.length]] as const).map(([v, label, n]) => (

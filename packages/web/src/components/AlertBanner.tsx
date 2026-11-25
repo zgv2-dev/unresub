@@ -12,13 +12,13 @@ export const AlertBanner = ({ alerts, onOpenCards }: { alerts: Alert[]; onOpenCa
   return (
     <section className="alerts" role="status" aria-live="polite">
       {lowByCard.map(a => (
-        <div key={a.accountId} className="alert danger">
-          <span className="alert-icon"><Icon name="wallet" /></span>
+        <div key={a.accountId} className="alert hot">
           <div className="alert-body">
-            <strong>Top up {formatMoney(a.shortfall, a.currency)}</strong>
-            <span>
-              Charges until {fmtDate(a.chargeAt)} need {formatMoney(a.required, a.currency)}, and the subscriptions card has {formatMoney(a.balance, a.currency)}.
-            </span>
+            <span>Top up the subscriptions card</span>
+            <strong className="big num">{formatMoney(a.shortfall, a.currency)}</strong>
+            <p>
+              Charges until {fmtDate(a.chargeAt)} need {formatMoney(a.required, a.currency)}, and the card has {formatMoney(a.balance, a.currency)}.
+            </p>
           </div>
           <button className="chip-btn" onClick={onOpenCards}>Cards</button>
         </div>

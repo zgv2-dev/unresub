@@ -10,7 +10,7 @@ import { Icon, type IconName } from './components/Icon.tsx';
 import { SubscriptionsTable } from './components/SubscriptionsTable.tsx';
 import { useMedia } from './hooks.ts';
 import { Enrol, Login, Logo, RecoveryCodes } from './components/Login.tsx';
-import { Summary } from './components/Summary.tsx';
+import { DayStrip, Summary } from './components/Summary.tsx';
 import { SubscriptionRow } from './components/SubscriptionRow.tsx';
 import { SubscriptionSheet } from './components/SubscriptionSheet.tsx';
 import { SyncProgress } from './components/SyncProgress.tsx';
@@ -378,6 +378,7 @@ const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide,
         </section>
       )}
       <Summary totals={data.totals} items={active} />
+      <DayStrip items={active} onOpen={onOpen} />
 
       <div className="seg seg-wide" role="tablist" style={{ marginTop: 20 }}>
         {([['active', 'Active', active.length], ['inactive', 'Inactive', inactive.length]] as const).map(([v, label, n]) => (
