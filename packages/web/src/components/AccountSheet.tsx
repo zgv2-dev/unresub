@@ -42,7 +42,8 @@ export const AccountSheet = ({ user, onClose, onLogout }: { user: User; onClose:
   const exportData = () =>
     run(async () => {
       const data = await auth.exportData();
-      await saveFile(`unresub-${user.username}.json`, JSON.stringify(data, null, 2), 'application/json');
+      const json = JSON.stringify(data, null, 2);
+      if (await saveFile(`unresub-${user.username}.json`, json, 'application/json')) setMsg({ ok: true, text: `Saved ${Math.ceil(json.length / 1024)} KB.` });
     });
 
   const [deleting, setDeleting] = useState(false);

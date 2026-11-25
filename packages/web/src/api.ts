@@ -111,14 +111,16 @@ const NativePasskey = registerPlugin<{
 
 // The app's WebView ignores <a download> with blob URLs, so it saves through the system picker (SaveFilePlugin).
 const NativeSaveFile = registerPlugin<{
-  save(o: { name: string; mime: string; text: string }): Promise<{ saved: boolean }>;
+  save(o: { name: string; mime: string; text: string }): Promise<{ saved: boolean; bytes?: number }>;
 }>('SaveFile');
 
 /** Saves text as a file: a download in the browser, the "Save as" picker in the app. False if cancelled. */
 export const saveFile = async (name: string, text: string, mime = 'text/plain') => {
   if (isNative) {
     try {
-      return (await NativeSaveFile.save({ name, mime, text })).saved;
+      const r = await NativeSaveFile.save({ name, mime, text });
+      if (r.saved && r.bytes === 0) throw new Error('The file was saved empty. Try another folder.');
+      return r.saved;
     } catch (e) {
       if ((e as { code?: string }).code === 'UNIMPLEMENTED') throw new Error('Update the app to save files.');
       throw e;
