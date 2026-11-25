@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Splash icon: the app mark (gradient tile with the sync glyph), sized for the 240dp splash icon canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="240dp"
+    android:height="240dp"
+    android:viewportWidth="240"
+    android:viewportHeight="240">
+    <path android:pathData="M96,64h48a32,32 0,0 1,32 32v48a32,32 0,0 1,-32 32h-48a32,32 0,0 1,-32 -32v-48a32,32 0,0 1,32 -32z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="64" android:startY="64"
+                android:endX="176" android:endY="176"
+                android:startColor="@color/splash_mark_start"
+                android:endColor="@color/splash_mark_end" />
+        </aapt:attr>
+    </path>
+    <group android:translateX="88" android:translateY="88" android:scaleX="2.6667" android:scaleY="2.6667">
+        <path
+            android:pathData="M21,12a9,9 0,0 1,-15.5 6.3L3,16M3,12a9,9 0,0 1,15.5 -6.3L21,8M21,3v5h-5M3,21v-5h5"
+            android:strokeColor="@color/splash_glyph"
+            android:strokeWidth="2.4"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:fillColor="#00000000" />
+    </group>
+</vector>

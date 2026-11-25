@@ -1,6 +1,7 @@
 package dev.unresub.app;
 
 import android.os.Bundle;
+import androidx.core.splashscreen.SplashScreen;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
@@ -8,6 +9,7 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        SplashScreen.installSplashScreen(this);
         registerPlugin(PasskeyPlugin.class);
         registerPlugin(SaveFilePlugin.class);
         super.onCreate(savedInstanceState);

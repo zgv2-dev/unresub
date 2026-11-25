@@ -881,3 +881,7 @@ code { font: 12.5px ui-monospace, 'SF Mono', Menlo, monospace; background: var(-
 .icon-btn.sm:hover { background: var(--surface-2); box-shadow: none; }
 .bank-card { border-radius: 22px; }
 .bank-card.subs { background: var(--hero); color: var(--on-hero); }
+
+/* First paint while the session loads: the same mark, size and place as the Android splash. */
+.boot { min-height: 100dvh; display: grid; place-items: center; }
+.boot .brand-mark { width: 112px; height: 112px; border-radius: 32px; }

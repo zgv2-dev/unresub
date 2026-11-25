@@ -35,7 +35,7 @@ export const App = () => {
     void refresh();
   };
   const user = status?.user;
-  if (status === undefined) return <main className="login" aria-busy><Logo size={28} /></main>;
+  if (status === undefined) return <main className="boot" aria-busy><Logo size={64} /></main>;
   if (codes?.length) return <RecoveryCodes codes={codes} onDone={() => setCodes(null)} />;
   if (!user) {
     return (
