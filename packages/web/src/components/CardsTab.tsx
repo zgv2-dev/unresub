@@ -20,7 +20,7 @@ export const CardsTab = ({ sources, accounts, shortfall, onChange }: Props) => {
     try {
       const r = await api.connectMonobank(token.trim());
       setToken('');
-      setMsg({ ok: true, text: `Connected ${r.name} with ${r.accounts} accounts. History is loading; monobank allows one request a minute, so a full year takes a while.` });
+      setMsg({ ok: true, text: `Connected ${r.name} with ${r.accounts} accounts.` });
       onChange();
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
@@ -37,7 +37,7 @@ export const CardsTab = ({ sources, accounts, shortfall, onChange }: Props) => {
           <span className="alert-icon"><Icon name="sparkle" /></span>
           <div className="alert-body">
             <strong>Pick your subscriptions card</strong>
-            <span>We'll warn you when its balance won't cover the next charges.</span>
+            <span>UnReSub warns you when its balance won't cover the next charges.</span>
           </div>
         </div>
       )}
@@ -49,8 +49,10 @@ export const CardsTab = ({ sources, accounts, shortfall, onChange }: Props) => {
               <div style={{ fontWeight: 650 }}>{src.name}</div>
               <div className="xs muted">
                 <span className={`status-dot ${src.webhookUrl ? 'on' : ''}`} />
-                {src.webhookUrl ? 'Live updates on' : 'Live updates off, set PUBLIC_URL'}
-                {src.sync.lastFinishedAt && !src.sync.running && <> · synced {fmtDate(src.sync.lastFinishedAt)}</>}
+                {[
+                  src.sync.lastFinishedAt && !src.sync.running && `Synced ${fmtDate(src.sync.lastFinishedAt)}.`,
+                  !src.webhookUrl && 'Live updates are off. Set PUBLIC_URL on the server.',
+                ].filter(Boolean).join(' ')}
               </div>
             </div>
             <button className="btn soft sm" disabled={src.sync.running} onClick={() => void api.syncSource(src.id).then(onChange)}>
@@ -97,9 +99,6 @@ export const CardsTab = ({ sources, accounts, shortfall, onChange }: Props) => {
           <span>Personal token</span>
           <input className="input" type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="from api.monobank.ua" autoComplete="off" />
         </label>
-        <p className="xs faint">
-          <Icon name="lock" size={12} style={{ verticalAlign: '-1px' }} /> Read-only. Stored encrypted on your server and never sent back to this app.
-        </p>
         <button className="btn block" disabled={busy || !token.trim()}>
           <Icon name="plus" size={18} /> {busy ? 'Connecting…' : 'Connect'}
         </button>

@@ -113,7 +113,7 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
     setData(d => d && { ...d, items: d.items.filter(i => i.key !== s.key) });
     try {
       const { batch } = await api.dismiss(s.key);
-      setToast({ text: `${s.name} moved to transactions`, undo: () => api.undoDismiss(batch) });
+      setToast({ text: `${s.name} moved to Transactions`, undo: () => api.undoDismiss(batch) });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -170,7 +170,7 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
   const errorBox = error && (
     <div className="alert danger" style={{ marginBottom: 14 }}>
       <span className="alert-icon"><Icon name="alert" /></span>
-      <div className="alert-body"><strong>Can't reach the server</strong><span>{error}</span></div>
+      <div className="alert-body"><strong>{error}</strong></div>
     </div>
   );
   const themeBtn = (
@@ -212,7 +212,7 @@ const Dashboard = ({ user, onLogout, onExpired }: { user: User; onLogout: () => 
                 <span className="avatar static">{initials(owner)}</span>
                 <div>
                   <strong>{owner}</strong>
-                  <span className="xs muted">{user.isAdmin ? 'Admin' : 'Subscriptions cabinet'}</span>
+                  {user.isAdmin && <span className="xs muted">Admin</span>}
                 </div>
               </div>
               <nav className="side-nav">
@@ -347,14 +347,14 @@ const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide,
           <h1 className="page-title">Archived</h1>
         </div>
         <p className="small muted" style={{ margin: '0 4px 14px' }}>
-          Cancelled or ended subscriptions. Ones that stay silent for two billing periods land here on their own. A new charge brings a subscription back.
+          A new charge moves a subscription back to Active.
         </p>
         {list.length ? (
           <ul className="list card dim-soft">
             {list.map(s => <SubscriptionRow key={s.key} s={s} lowBalance={false} onOpen={() => onOpen(s.key)} onRestore={() => onRestore(s)} />)}
           </ul>
         ) : (
-          <div className="card empty small">Nothing here.</div>
+          <div className="card empty small">No archived subscriptions.</div>
         )}
       </>
     );
@@ -390,14 +390,14 @@ const SubscriptionsTab = ({ data, sources, syncing, onOpen, onOpenCards, onHide,
       {view === 'active' && !active.length && (
         <div className="card empty section">
           <span className="svc"><Icon name={syncing ? 'clock' : 'sparkle'} /></span>
-          <strong style={{ color: 'var(--text)' }}>{syncing ? 'Looking through your history…' : sources.length ? 'No subscriptions found yet' : 'Connect monobank to start'}</strong>
-          <span className="small">{syncing ? 'Subscriptions show up here as statements load.' : sources.length ? 'They appear after two charges from the same merchant.' : 'UnReSub reads your statements and finds recurring payments.'}</span>
+          <strong style={{ color: 'var(--text)' }}>{syncing ? 'Loading your statements…' : sources.length ? 'No subscriptions found' : 'Connect monobank to find your subscriptions.'}</strong>
+          {!syncing && !!sources.length && <span className="small">A subscription appears after two charges from the same merchant. To add one sooner, open its charge in Transactions.</span>}
           {!sources.length && <button className="btn sm" onClick={onOpenCards}>Connect</button>}
         </div>
       )}
       {view === 'inactive' && (
         <p className="small muted" style={{ margin: '14px 4px 0' }}>
-          {inactive.length ? 'The expected charge never came. If you cancelled one, archive it.' : 'Nothing inactive. Every subscription charged when expected.'}
+          {inactive.length ? 'These subscriptions missed their expected charge. Archive the ones you cancelled.' : 'Every subscription charged on time.'}
         </p>
       )}
 

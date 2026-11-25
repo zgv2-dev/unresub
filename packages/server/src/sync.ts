@@ -332,8 +332,8 @@ const isOutOfRange = (e: unknown) => (e as { status?: number }).status === 400 &
 export const friendlyError = (e: unknown) => {
   const status = (e as { status?: number }).status;
   if (status === 401 || status === 403) return 'monobank rejected the token. Add a new one from api.monobank.ua.';
-  if (status === 429) return 'monobank is rate limiting requests. Sync will try again later.';
-  if (isOutOfRange(e)) return 'monobank refused the requested dates. Sync will try again later.';
-  if (status && status >= 500) return 'monobank is not responding right now. Sync will try again later.';
+  if (status === 429) return 'monobank is limiting requests. Sync again in a few minutes.';
+  if (isOutOfRange(e)) return 'monobank refused the requested dates. Sync again later.';
+  if (status && status >= 500) return "monobank isn't responding. Sync again later.";
   return (e as Error).message;
 };

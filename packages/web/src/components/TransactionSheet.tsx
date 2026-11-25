@@ -127,7 +127,7 @@ export const TransactionSheet = ({ t, account, catalog, onClose, onOpenSubscript
           <label className="check">
             <input type="checkbox" checked={matchAmount} onChange={e => setMatchAmount(e.target.checked)} />
             <span>
-              Future charges from this merchant count only if they are about {amount}
+              Future charges from this merchant count only if they are about {amount}.
               <em>Turn off if the price changes every time.</em>
             </span>
           </label>
@@ -149,7 +149,6 @@ export const TransactionSheet = ({ t, account, catalog, onClose, onOpenSubscript
                   </li>
                 ))}
               </ul>
-              <p className="xs faint">Ticked charges are added now. New charges after today are picked up automatically.</p>
             </>
           )}
 

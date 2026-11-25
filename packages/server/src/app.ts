@@ -270,10 +270,15 @@ export const createApp = (deps: AppDeps) => {
   app.onError((err, c) => {
     if (err instanceof HTTPException) return err.res ?? c.json({ error: err.message || 'Error' }, err.status);
     if (err instanceof MonobankError) {
-      return c.json({ error: err.status === 403 ? 'monobank rejected the token' : err.message }, err.status === 429 ? 429 : 502);
+      const error =
+        err.status === 401 || err.status === 403 ? 'monobank rejected the token. Create a new one at api.monobank.ua.'
+        : err.status === 429 ? 'monobank allows one request a minute. Try again in a minute.'
+        : err.status >= 500 ? "monobank isn't responding. Try again later."
+        : err.message;
+      return c.json({ error }, err.status === 429 ? 429 : 502);
     }
     console.error(err);
-    return c.json({ error: 'Internal error' }, 500);
+    return c.json({ error: 'The server hit an error. Try again.' }, 500);
   });
 
   app.get('/healthz', c => c.text('ok'));
@@ -358,13 +363,13 @@ export const createApp = (deps: AppDeps) => {
       const code = typeof body.setupCode === 'string' ? body.setupCode.trim() : '';
       if (!deps.setupCodes.some(s => safeEqual(code, s))) {
         recordFailure(c, limits);
-        throw new HTTPException(403, { message: 'Wrong setup code. It is printed in the server log.' });
+        throw new HTTPException(403, { message: 'Wrong setup code. Find it in the server log.' });
       }
     } else if (core.signupMode() !== 'open') {
       const invite = typeof body.invite === 'string' ? sha256(body.invite.trim()) : '';
       if (!core.validInvite(invite)) {
         recordFailure(c, limits);
-        throw new HTTPException(403, { message: 'Sign-up needs an invite link from the admin' });
+        throw new HTTPException(403, { message: 'Ask the admin for an invite link to sign up.' });
       }
     }
     if (core.userByName(username)) throw new HTTPException(409, { message: 'That username is taken' });
@@ -383,7 +388,7 @@ export const createApp = (deps: AppDeps) => {
       if (core.userByName(reg.username)) throw new HTTPException(409, { message: 'That username is taken' });
       const u = tenants.createUser(reg.username, '', setup, reg.userId);
       if (!setup && core.signupMode() !== 'open' && !(invite && core.useInvite(invite, u.id))) {
-        throw new HTTPException(403, { message: 'That invite was already used' });
+        throw new HTTPException(403, { message: 'That invite was already used. Ask the admin for a new one.' });
       }
       core.insertPasskey({ ...reg.passkey, user_id: u.id, name: passkeyName(body.name, c) });
       return { user: u, codes: newRecoveryCodes(u.id) };
@@ -428,7 +433,7 @@ export const createApp = (deps: AppDeps) => {
     const code = typeof body.code === 'string' ? normalizedCodeHash(body.code) : '';
     if (!user || !core.useRecoveryCode(user.id, code)) {
       recordFailure(c, limits, username);
-      throw new HTTPException(401, { message: 'Wrong username or recovery code' });
+      throw new HTTPException(401, { message: 'Wrong username or recovery code.' });
     }
     log('[auth] recovery code used');
     return c.json(session(c, user, body.client, 'enrol'));
@@ -458,7 +463,7 @@ export const createApp = (deps: AppDeps) => {
     const ok = usable ? await verifyPassword(password, user!.password_hash) : (await burnPasswordCheck(password), false);
     if (!user || !ok) {
       recordFailure(c, limits, username);
-      throw new HTTPException(401, { message: 'Passwords are gone. Sign in with your passkey.' });
+      throw new HTTPException(401, { message: 'Wrong username or password. If this account has a passkey, sign in with it.' });
     }
     limits.user.reset(username);
     return c.json(session(c, user, body.client, 'enrol'));
@@ -499,12 +504,12 @@ export const createApp = (deps: AppDeps) => {
   api.patch('/me/passkeys/:id', async c => {
     const body = await readJson(c);
     const name = typeof body.name === 'string' ? body.name.trim().slice(0, 60) : '';
-    if (!name) throw new HTTPException(400, { message: 'Give it a name' });
+    if (!name) throw new HTTPException(400, { message: 'Enter a name.' });
     if (!core.renamePasskey(c.var.user.id, c.req.param('id'), name)) throw new HTTPException(404);
     return c.body(null, 204);
   });
   api.delete('/me/passkeys/:id', c => {
-    if (core.passkeyCount(c.var.user.id) <= 1) throw new HTTPException(409, { message: "Add another passkey first: you can't remove the last one" });
+    if (core.passkeyCount(c.var.user.id) <= 1) throw new HTTPException(409, { message: 'Add another passkey before removing this one.' });
     if (!core.deletePasskey(c.var.user.id, c.req.param('id'))) throw new HTTPException(404);
     return c.body(null, 204);
   });
@@ -542,7 +547,7 @@ export const createApp = (deps: AppDeps) => {
     const me = c.var.user;
     await webauthn.verifyAuthentication(c, body.flowId, body.response, id => core.getPasskey(id));
     if (me.is_admin && core.adminCount() === 1 && core.userCount() > 1) {
-      throw new HTTPException(409, { message: 'Make someone else an admin first' });
+      throw new HTTPException(409, { message: 'Make someone else an admin first.' });
     }
     deleteUser(me.id);
     sessions.end(c, c.var.session);
@@ -558,7 +563,7 @@ export const createApp = (deps: AppDeps) => {
     const target = core.getUser(c.req.param('id'));
     if (!target) throw new HTTPException(404);
     if (typeof body.isAdmin === 'boolean') {
-      if (!body.isAdmin && target.is_admin && core.adminCount() === 1) throw new HTTPException(409, { message: 'Keep at least one admin' });
+      if (!body.isAdmin && target.is_admin && core.adminCount() === 1) throw new HTTPException(409, { message: 'Make someone else an admin first.' });
       core.setAdmin(target.id, body.isAdmin);
     }
     return c.json(publicUser(core.getUser(target.id)!));
@@ -566,7 +571,7 @@ export const createApp = (deps: AppDeps) => {
   admin.delete('/users/:id', c => {
     const target = core.getUser(c.req.param('id'));
     if (!target) throw new HTTPException(404);
-    if (target.id === c.var.user.id) throw new HTTPException(409, { message: 'Delete your own account from Account settings' });
+    if (target.id === c.var.user.id) throw new HTTPException(409, { message: 'Delete your own account under Your data.' });
     deleteUser(target.id);
     return c.body(null, 204);
   });
@@ -617,7 +622,7 @@ export const createApp = (deps: AppDeps) => {
   api.post('/sources/monobank', async c => {
     const { db, sync } = c.var.tenant;
     const { token } = await c.req.json<{ token?: string }>();
-    if (!token || !/^[\w-]{20,}$/.test(token.trim())) throw new HTTPException(400, { message: 'Paste the token from api.monobank.ua' });
+    if (!token || !/^[\w-]{20,}$/.test(token.trim())) throw new HTTPException(400, { message: 'Paste the personal token from api.monobank.ua.' });
     const r = await sync.connectMonobank(token.trim());
     deps.core.addRoute(r.id, c.var.user.id);
     return c.json(r, 201);
@@ -827,8 +832,8 @@ export const createApp = (deps: AppDeps) => {
     const { db, sync } = c.var.tenant;
     const body = await c.req.json<{ transactionId: string; name?: string; serviceId?: string | null; period: Period; matchAmount?: boolean; attachIds?: string[] }>();
     const t = db.listTransactions().find(x => x.id === body.transactionId);
-    if (!t) throw new HTTPException(404, { message: 'Transaction not found' });
-    if (t.operationAmount >= 0) throw new HTTPException(400, { message: 'Only charges can be subscriptions' });
+    if (!t) throw new HTTPException(404, { message: 'Transaction not found.' });
+    if (t.operationAmount >= 0) throw new HTTPException(400, { message: "Incoming money can't be a subscription." });
     if (!PERIODS.includes(body.period)) throw new HTTPException(400, { message: 'Bad period' });
     if (body.serviceId && !serviceById(body.serviceId)) throw new HTTPException(400, { message: 'Unknown service' });
     const groupKey = groupKeyOf(t);
@@ -907,7 +912,7 @@ export const createApp = (deps: AppDeps) => {
     const key = c.req.param('key');
     const { transactionId } = await c.req.json<{ transactionId: string }>();
     const item = findSubscription(buildSubscriptionsView(db, sync).items, key);
-    if (!item?.transactionIds.includes(transactionId)) throw new HTTPException(404, { message: 'Charge is not part of this subscription' });
+    if (!item?.transactionIds.includes(transactionId)) throw new HTTPException(404, { message: 'That charge is not part of this subscription.' });
     db.excludeTransaction(transactionId, key);
     const manual = db.listManual().find(m => m.transactionIds.includes(transactionId));
     if (manual) db.setManualTransactionIds(manual.key, manual.transactionIds.filter(id => id !== transactionId));

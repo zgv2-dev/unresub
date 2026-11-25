@@ -21,7 +21,6 @@ export const Shell = ({ children }: { children: ReactNode }) => (
     <div className="login-hero">
       <Logo size={28} />
       <h1>UnReSub</h1>
-      <p>Every subscription on your monobank cards, the next charge date, and what it really costs per month and per year.</p>
       <div className="login-floats">
         {SAMPLE.map(([id, name]) => <ServiceIcon key={id} serviceId={id} name={name} />)}
       </div>
@@ -85,8 +84,8 @@ export const Login = ({ status, onDone, onServerChange }: { status: AuthStatus |
       const st = e instanceof ApiError ? e.status : 0;
       setError(
         st === 0 ? `Can't reach ${url}. Check the address and your connection.`
-        : st === 401 || st === 404 ? `${url} answers, but runs an older UnReSub. Update the server, then try again.`
-        : `${url} answered with an error (${st}). Try again in a minute.`,
+        : st === 401 || st === 404 ? `${url} runs an older UnReSub. Update the server and try again.`
+        : `${url} returned error ${st}. Try again in a minute.`,
       );
     } finally {
       setBusy(false);
@@ -105,7 +104,6 @@ export const Login = ({ status, onDone, onServerChange }: { status: AuthStatus |
             <Icon name="chevron" size={18} /> {busy ? 'Checking…' : 'Continue'}
           </button>
           {error && <p className="small error" role="alert">{error}</p>}
-          <p className="xs faint">The address where you or your family host UnReSub.</p>
         </form>
       </Shell>
     );
@@ -138,7 +136,6 @@ export const Login = ({ status, onDone, onServerChange }: { status: AuthStatus |
         {mode === 'signin' && (
           <>
             <strong>Sign in</strong>
-            <p className="small muted">With the passkey on this device, your phone, or your password manager. No passwords.</p>
             <button className="btn block" disabled={busy}>
               <Icon name="key" size={18} /> {busy ? 'Waiting for passkey…' : 'Sign in with passkey'}
             </button>
@@ -150,7 +147,7 @@ export const Login = ({ status, onDone, onServerChange }: { status: AuthStatus |
             <strong>{mode === 'setup' ? 'Create the admin account' : 'Create your account'}</strong>
             {mode === 'setup' && (
               <>
-                <p className="small muted">First run. The setup code is printed in the server log{status?.legacyData ? ', and your existing data moves to this account' : ''}.</p>
+                <p className="small muted">The setup code is in the server log.{status?.legacyData ? ' Your existing data will move to this account.' : ''}</p>
                 <label className="field">
                   <span>Setup code</span>
                   <input className="input" value={setupCode} onChange={e => setSetupCode(e.target.value)} autoFocus autoCapitalize="off" autoCorrect="off" spellCheck={false} />
@@ -161,14 +158,13 @@ export const Login = ({ status, onDone, onServerChange }: { status: AuthStatus |
             <button className="btn block" disabled={busy || !username.trim() || (mode === 'setup' && !setupCode.trim())}>
               <Icon name="key" size={18} /> {busy ? 'Waiting for passkey…' : 'Create passkey'}
             </button>
-            <p className="xs faint">Your device saves a passkey for this account. You'll get recovery codes in case you lose it.</p>
           </>
         )}
 
         {mode === 'recover' && (
           <>
             <strong>Lost your passkey?</strong>
-            <p className="small muted">Use one of your recovery codes, then add a new passkey. No codes? Ask the admin for a passkey link.</p>
+            <p className="small muted">Enter a recovery code, then add a new passkey. If you have no codes left, ask the admin for a passkey link.</p>
             {usernameField}
             <label className="field">
               <span>Recovery code</span>
@@ -181,7 +177,7 @@ export const Login = ({ status, onDone, onServerChange }: { status: AuthStatus |
         {mode === 'password' && (
           <>
             <strong>Account from before passkeys</strong>
-            <p className="small muted">Your password works one last time, to add a passkey. Then it's deleted.</p>
+            <p className="small muted">Your password works one more time so you can add a passkey.</p>
             {usernameField}
             <label className="field">
               <span>Password</span>
@@ -203,7 +199,7 @@ export const Login = ({ status, onDone, onServerChange }: { status: AuthStatus |
         )}
         {isNative && (
           <button type="button" className="btn ghost sm" onClick={() => setEditServer(true)}>
-            Server: {getServer()} · change
+            Change server ({getServer()})
           </button>
         )}
       </form>
@@ -222,7 +218,7 @@ export const RecoveryCodes = ({ codes, onDone }: { codes: string[]; onDone: () =
     <Shell>
       <div className="card pad stack">
         <strong>Save your recovery codes</strong>
-        <p className="small muted">If you lose every passkey, one of these gets you back in. Each works once. They won't be shown again.</p>
+        <p className="small muted">If you lose your passkeys, each code signs you in once. You won't see these codes again.</p>
         <ul className="codes num">{codes.map(c => <li key={c}>{c}</li>)}</ul>
         <div className="sheet-actions">
           <button className="btn soft sm" onClick={() => void navigator.clipboard?.writeText(text).then(() => setSaved(true), download)}><Icon name="copy" size={16} /> Copy</button>
@@ -254,7 +250,7 @@ export const Enrol = ({ username, onDone, onCancel }: { username: string; onDone
     <Shell>
       <div className="card pad stack">
         <strong>Add a passkey, {username}</strong>
-        <p className="small muted">UnReSub signs in with passkeys only. Create one now to continue.</p>
+        <p className="small muted">You need a passkey to continue.</p>
         <button className="btn block" onClick={() => void add()} disabled={busy}>
           <Icon name="key" size={18} /> {busy ? 'Waiting for passkey…' : 'Create passkey'}
         </button>

@@ -1,7 +1,7 @@
 import type { Source } from '../api.ts';
 import { fmtEta, last4 } from '../format.ts';
 
-const STATE_LABEL = { fetching: 'Loading', waiting_rate_limit: 'Waiting for monobank rate limit', retrying: 'monobank asked to slow down, retrying', idle: '' } as const;
+const STATE_LABEL = { fetching: '', waiting_rate_limit: 'waiting for monobank', retrying: 'monobank is busy, retrying', idle: '' } as const;
 
 /** Per-card history progress while a sync runs. */
 export const SyncProgress = ({ src, compact }: { src: Source; compact?: boolean }) => {

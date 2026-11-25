@@ -97,10 +97,10 @@ jobs:
           cp "$out"/debug/*.apk "dist-apk/unresub-$VERSION_NAME-debug.apk"
           if [ "$SIGNED" = true ]; then
             cp "$out"/release/*.apk "dist-apk/unresub-$VERSION_NAME.apk"
-            note="**unresub-$VERSION_NAME.apk** is the signed release build. The debug APK is for testing."
+            note="Install **unresub-$VERSION_NAME.apk**."
           else
             cp "$out"/release/*.apk "dist-apk/unresub-$VERSION_NAME-release-unsigned.apk"
-            note="Install **unresub-$VERSION_NAME-debug.apk**. The release APK is unsigned (signing secrets not set) and won't install as is."
+            note="Install **unresub-$VERSION_NAME-debug.apk**. The release APK won't install until the signing secrets are added to the repository."
           fi
           if gh release view "v$VERSION_NAME" >/dev/null 2>&1; then
             # Re-run of the same build: replace the files.
@@ -110,5 +110,5 @@ jobs:
           gh release create "v$VERSION_NAME" dist-apk/*.apk \
             --target "$GITHUB_SHA" \
             --title "UnReSub $VERSION_NAME" \
-            --notes "$note"$'\n\n'"Built from $GITHUB_SHA." \
+            --notes "$note" \
             --latest

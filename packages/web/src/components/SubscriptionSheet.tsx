@@ -103,17 +103,17 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
     >
       {s.lifecycle !== 'active' && (
         <div className={`callout ${s.lifecycle === 'inactive' ? '' : 'neutral'}`}>
-          {s.lifecycle === 'inactive' && <>The charge expected on {fmtDate(s.nextChargeAt)} never came (last one {fmtDate(s.lastChargeAt)}). If you cancelled it, archive it.</>}
+          {s.lifecycle === 'inactive' && <>The charge expected on {fmtDate(s.nextChargeAt)} never came. The last one was on {fmtDate(s.lastChargeAt)}. If you cancelled it, archive it.</>}
           {s.lifecycle === 'archived' && (
             <>
-              {s.archivedBy === 'user' && s.archivedAt ? `A new charge brings it back. Archived by you on ${fmtDate(s.archivedAt)}` : `No charge since ${fmtDate(s.lastChargeAt)}, so it was archived automatically. A new charge brings it back.`}
+              {s.archivedBy === 'user' && s.archivedAt ? `You archived it on ${fmtDate(s.archivedAt)}. A new charge moves it back to Active.` : `No charge since ${fmtDate(s.lastChargeAt)}. A new charge moves it back to Active.`}
             </>
           )}
         </div>
       )}
       {s.needsDetails && (
         <div className="callout">
-          We don't know this merchant yet. Pick the service or give it a name so it is easy to recognise.
+          UnReSub doesn't recognise this merchant. Pick the service or enter a name.
         </div>
       )}
 
@@ -136,7 +136,7 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
         <div>
           <span>Card</span>
           <strong>{s.account?.maskedPan ? `•••• ${s.account.maskedPan.slice(-4)}` : '—'}</strong>
-          <em>{s.account?.isSubscriptionCard ? 'Subscriptions card' : s.onMainCard ? 'Main card · move to the subscriptions card' : s.account?.type ?? ''}</em>
+          <em>{s.account?.isSubscriptionCard ? 'Subscriptions card' : s.onMainCard ? 'Main card. Move it to the subscriptions card.' : s.account?.type ?? ''}</em>
           {s.movedFrom && <em>Moved from ••{s.movedFrom.maskedPan?.slice(-4) ?? '?'}</em>}
         </div>
         <div>
@@ -157,7 +157,7 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
             <Icon name="external" size={18} /> Cancel
           </a>
         ) : (
-          <button className="btn danger" disabled title="Add a cancel URL below">
+          <button className="btn danger" disabled title="Add a cancel link below">
             <Icon name="external" size={18} /> Cancel
           </button>
         )}
@@ -203,20 +203,18 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
           <textarea className="input" value={notes} onChange={e => setNotes(e.target.value)} rows={2} />
         </label>
         <p className="xs faint">
-          {s.periodCorrected ? 'Period set by you; the next date follows it. ' : ''}Bank description <code>{s.detectedName}</code> · {s.chargeCount} charges seen{foreign && ` · rate ${s.rate.toFixed(2)}`}
+          Bank description <code>{s.detectedName}</code> · {s.chargeCount} charges seen{foreign && ` · rate ${s.rate.toFixed(2)}`}
         </p>
       </form>
 
       <div className="stack fix">
         <div className="divider-title">Detected wrong?</div>
-        <p className="xs faint">
-          Wrong service or period: change it above and save. It sticks when new charges come in.
-        </p>
+        <p className="xs faint">To fix the service or period, change it above and save.</p>
 
         <div className="fix-row">
           <span>
             <strong>Not a subscription</strong>
-            <em>Turn its charges back into plain transactions, now and in future.</em>
+            <em>Its charges, including future ones, move back to Transactions.</em>
           </span>
           <button className="btn ghost sm" disabled={busy} onClick={onHide}>
             <Icon name="eyeOff" size={16} /> Not a subscription
@@ -243,7 +241,7 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
           <div className="fix-row">
             <span>
               <strong>Same subscription as another row</strong>
-              <em>For example after a price change or a new bank description.</em>
+              <em>This happens after a price change or a new bank description.</em>
             </span>
             <div className="fix-btns">
               <Select
@@ -284,7 +282,6 @@ export const SubscriptionSheet = ({ s, catalog, others, onClose, onSaved, onHide
           <div className="fix-row">
             <span>
               <strong>Split by price</strong>
-              <em>All charges from {s.detectedName} are separated by amount.</em>
             </span>
             <button className="btn ghost sm" disabled={busy} onClick={() => void act(() => api.setSplit(s.groupKey, false))}>Undo split</button>
           </div>

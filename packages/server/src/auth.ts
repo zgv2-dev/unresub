@@ -18,7 +18,7 @@ export const publicUser = (u: UserRow) => ({ id: u.id, username: u.username, isA
 
 export const checkUsername = (username: unknown) => {
   if (typeof username !== 'string' || !USERNAME.test(username.trim())) {
-    throw new HTTPException(400, { message: 'Username: 3 to 32 letters, digits, dots, dashes or underscores' });
+    throw new HTTPException(400, { message: 'A username needs 3 to 32 letters, digits, dots, dashes or underscores.' });
   }
   return username.trim().toLowerCase();
 };
@@ -138,12 +138,12 @@ export const mustEnrol = (core: CoreDb, session: SessionRow) => session.scope ==
 export const requireUser = (core: CoreDb, sessions: Sessions, tenants: Tenants): MiddlewareHandler<AuthEnv> => async (c, next) => {
   const found = sessions.read(c);
   const user = found && core.getUser(found.session.user_id);
-  if (!found || !user) throw new HTTPException(401, { message: 'Sign in first' });
+  if (!found || !user) throw new HTTPException(401, { message: 'Sign in again.' });
   if (found.viaCookie && !SAFE.has(c.req.method) && !safeEqual(c.req.header('x-csrf-token') ?? '', found.session.csrf)) {
-    throw new HTTPException(403, { message: 'Missing or bad CSRF token, reload the page' });
+    throw new HTTPException(403, { message: 'Reload the page and try again.' });
   }
   const enrol = mustEnrol(core, found.session);
-  if (enrol && !ENROL_PATHS.has(c.req.path)) throw new HTTPException(403, { message: 'Add a passkey to continue' });
+  if (enrol && !ENROL_PATHS.has(c.req.path)) throw new HTTPException(403, { message: 'Add a passkey to continue.' });
   c.set('mustEnrol', enrol);
   c.set('user', user);
   c.set('session', found.session);
@@ -153,6 +153,6 @@ export const requireUser = (core: CoreDb, sessions: Sessions, tenants: Tenants):
 };
 
 export const requireAdmin: MiddlewareHandler<AuthEnv> = async (c, next) => {
-  if (!c.var.user.is_admin) throw new HTTPException(403, { message: 'Admins only' });
+  if (!c.var.user.is_admin) throw new HTTPException(403, { message: 'Only admins can do this.' });
   await next();
 };

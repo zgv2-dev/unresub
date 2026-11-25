@@ -59,7 +59,7 @@ export const AccountSheet = ({ user, onClose, onLogout }: { user: User; onClose:
           <span className="avatar static">{user.username.slice(0, 2).toUpperCase()}</span>
           <div>
             <h2>{user.username}</h2>
-            <div className="muted small">{user.isAdmin ? 'Admin · ' : ''}since {fmtDate(user.createdAt)}</div>
+            {user.isAdmin && <div className="muted small">Admin</div>}
           </div>
         </>
       }
@@ -86,7 +86,7 @@ export const AccountSheet = ({ user, onClose, onLogout }: { user: User; onClose:
       </div>
       {codes && (
         <div className="fix-row" style={{ marginTop: 10, display: 'block' }}>
-          <strong>Save these recovery codes. Each works once; they won't be shown again.</strong>
+          <strong>Save these recovery codes. Each one works once, and you won't see them again.</strong>
           <ul className="codes num">{codes.map(c => <li key={c}>{c}</li>)}</ul>
           <button className="btn soft sm" onClick={() => void navigator.clipboard?.writeText(codes.join('\n')).catch(() => {})}><Icon name="copy" size={16} /> Copy</button>
         </div>
@@ -115,7 +115,7 @@ const AdminPanel = ({ user }: { user: User }) => {
   const [invites, setInvites] = useState<Invite[]>([]);
   const [signup, setSignup] = useState<'invite' | 'open'>('invite');
   const [link, setLink] = useState<string | null>(null);
-  const [linkLabel, setLinkLabel] = useState('Invite link, valid 7 days, one use');
+  const [linkLabel, setLinkLabel] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const load = () =>
@@ -132,7 +132,7 @@ const AdminPanel = ({ user }: { user: User }) => {
       // The web origin is the server; inside the app, use the server URL.
       const url = `${getServer() || location.origin}/?invite=${encodeURIComponent(code)}`;
       setLink(url);
-      setLinkLabel('Invite link, valid 7 days, one use');
+      setLinkLabel('This invite link works once within 7 days.');
       await navigator.clipboard?.writeText(url).catch(() => {});
     });
 
@@ -141,7 +141,7 @@ const AdminPanel = ({ user }: { user: User }) => {
       const { token } = await admin.reenrolLink(u.id);
       const url = `${getServer() || location.origin}/?reenrol=${encodeURIComponent(token)}`;
       setLink(url);
-      setLinkLabel(`Passkey link for ${u.username}, valid 24 hours, one use`);
+      setLinkLabel(`This link lets ${u.username} add a passkey. It works once within 24 hours.`);
       await navigator.clipboard?.writeText(url).catch(() => {});
     });
 
@@ -174,9 +174,7 @@ const AdminPanel = ({ user }: { user: User }) => {
           <button className="btn ghost sm" onClick={() => void navigator.clipboard?.writeText(link)} aria-label="Copy"><Icon name="copy" size={16} /></button>
         </div>
       )}
-      <p className="xs faint" style={{ margin: '8px 4px' }}>Each person's cards and subscriptions are private to them, admins included.</p>
-
-      <label className="toggle-row small" style={{ padding: '4px' }}>
+      <label className="toggle-row small" style={{ padding: '4px', marginTop: 8 }}>
         <span>Anyone with the link can sign up</span>
         <span className="switch">
           <input type="checkbox" checked={signup === 'open'} onChange={e => void act(() => admin.setSignup(e.target.checked ? 'open' : 'invite'))} />

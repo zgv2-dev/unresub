@@ -138,7 +138,7 @@ const passkeyError = (e: unknown) => {
   const msg = (e as Error)?.message ?? String(e);
   if (name === 'NotAllowedError' || /cancel/i.test(msg)) return new Error('Passkey request cancelled.');
   if (name === 'InvalidStateError') return new Error('This device already has a passkey for this account.');
-  return new Error(msg || 'Passkey failed');
+  return new Error(msg || "The passkey didn't work. Try again.");
 };
 
 const createPasskey = async (options: Record<string, any>) => {

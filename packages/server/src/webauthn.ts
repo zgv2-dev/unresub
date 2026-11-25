@@ -86,9 +86,9 @@ export class WebAuthn {
       expectedRPID: this.rpId(c),
       requireUserVerification: true,
     }).catch(e => {
-      throw new HTTPException(400, { message: `Passkey not accepted: ${(e as Error).message}` });
+      throw new HTTPException(400, { message: `The passkey wasn't accepted: ${(e as Error).message}` });
     });
-    if (!result.verified) throw new HTTPException(400, { message: 'Passkey not accepted' });
+    if (!result.verified) throw new HTTPException(400, { message: "The passkey wasn't accepted. Try again." });
     const { credential, credentialDeviceType, credentialBackedUp } = result.registrationInfo;
     return {
       ...flow.data,
@@ -118,7 +118,7 @@ export class WebAuthn {
     const r = response as AuthenticationResponseJSON;
     const passkey = typeof r?.id === 'string' ? find(r.id) : undefined;
     if (!passkey || (flow.data.userId && passkey.user_id !== flow.data.userId)) {
-      throw new HTTPException(401, { message: "This passkey isn't registered here" });
+      throw new HTTPException(401, { message: "This passkey isn't registered on this server." });
     }
     const result = await verifyAuthenticationResponse({
       response: r,
@@ -128,7 +128,7 @@ export class WebAuthn {
       requireUserVerification: true,
       credential: { id: passkey.id, publicKey: Buffer.from(passkey.public_key, 'base64url'), counter: passkey.counter, transports: parseTransports(passkey.transports) },
     }).catch(() => ({ verified: false as const, authenticationInfo: null }));
-    if (!result.verified) throw new HTTPException(401, { message: 'Passkey check failed' });
+    if (!result.verified) throw new HTTPException(401, { message: 'The passkey check failed. Try again.' });
     return { passkey, newCounter: result.authenticationInfo.newCounter };
   }
 }

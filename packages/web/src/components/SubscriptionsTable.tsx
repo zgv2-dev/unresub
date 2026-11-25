@@ -21,7 +21,7 @@ type Props = {
 };
 
 const status = (s: SubscriptionItem, low: boolean): [string, string] =>
-  s.lifecycle === 'archived' ? [s.archivedBy === 'user' ? 'Archived' : 'Archived, silent', 'off']
+  s.lifecycle === 'archived' ? [s.archivedBy === 'user' ? 'Archived' : 'Stopped charging', 'off']
   : s.lifecycle === 'inactive' ? ['No recent charge', 'warn']
   : s.status === 'overdue' ? ['Charge late', 'danger']
   : low ? ['Low balance', 'danger']
@@ -31,8 +31,8 @@ const status = (s: SubscriptionItem, low: boolean): [string, string] =>
 
 const EMPTY: Record<View, string> = {
   active: 'No subscriptions yet.',
-  inactive: 'Nothing inactive. Every subscription charged when expected.',
-  archived: 'Nothing archived. Archive a subscription once you cancel it; ones silent for two billing periods move here on their own.',
+  inactive: 'Every subscription charged on time.',
+  archived: 'No archived subscriptions. Archive a subscription after you cancel it.',
 };
 
 /** Desktop: cabinet-style table with tabs, like the monobank API cabinet. */

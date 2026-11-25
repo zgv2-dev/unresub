@@ -17,7 +17,7 @@ export const AlertBanner = ({ alerts, onOpenCards }: { alerts: Alert[]; onOpenCa
           <div className="alert-body">
             <strong>Top up {formatMoney(a.shortfall, a.currency)}</strong>
             <span>
-              Charges until {fmtDate(a.chargeAt)} need {formatMoney(a.required, a.currency)}, the subscriptions card has {formatMoney(a.balance, a.currency)}.
+              Charges until {fmtDate(a.chargeAt)} need {formatMoney(a.required, a.currency)}, and the subscriptions card has {formatMoney(a.balance, a.currency)}.
             </span>
           </div>
           <button className="chip-btn" onClick={onOpenCards}>Cards</button>
@@ -27,7 +27,7 @@ export const AlertBanner = ({ alerts, onOpenCards }: { alerts: Alert[]; onOpenCa
         <div key={a.key} className={`alert ${a.overdue ? 'danger' : ''}`}>
           <span className="alert-icon"><Icon name={a.overdue ? 'alert' : 'bell'} /></span>
           <div className="alert-body">
-            <strong>{a.overdue ? `${a.name}: charge not seen yet` : `${a.name} charges ${relative(a.chargeAt)}`}</strong>
+            <strong>{a.overdue ? `No charge from ${a.name} yet` : `${a.name} charges ${relative(a.chargeAt)}`}</strong>
             <span className="num">
               {formatMoney(a.price, a.currency)} · {a.overdue ? `was due ${fmtDate(a.chargeAt)}` : fmtDate(a.chargeAt)}
             </span>
@@ -38,7 +38,7 @@ export const AlertBanner = ({ alerts, onOpenCards }: { alerts: Alert[]; onOpenCa
         <div className="alert neutral">
           <span className="alert-icon"><Icon name="card" /></span>
           <div className="alert-body">
-            <strong>{onMain.length} {onMain.length === 1 ? 'subscription is' : 'subscriptions are'} on the main card</strong>
+            <strong>Move {onMain.length} {onMain.length === 1 ? 'subscription' : 'subscriptions'} to the subscriptions card</strong>
             <span className="clamp-1">{[...new Set(onMain.map(a => a.name))].join(', ')}</span>
           </div>
         </div>
