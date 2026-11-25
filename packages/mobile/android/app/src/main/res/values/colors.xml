@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Same as the web app's --bg and --hero, so the splash hands over to the app without a flash. -->
+    <!-- Same colours as the web app background and brand mark, so the splash hands over to the app without a flash. -->
     <color name="splash_bg">#EFE9F5</color>
     <color name="splash_mark_start">#7B5CF0</color>
     <color name="splash_mark_end">#C35BE0</color>
