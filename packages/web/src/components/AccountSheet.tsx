@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { admin, auth, getServer, type Invite, type Passkey, type User } from '../api.ts';
+import { admin, auth, getServer, saveFile, type Invite, type Passkey, type User } from '../api.ts';
 import { fmtDate } from '../format.ts';
 import { Icon } from './Icon.tsx';
 import { Sheet } from './Sheet.tsx';
@@ -42,12 +42,7 @@ export const AccountSheet = ({ user, onClose, onLogout }: { user: User; onClose:
   const exportData = () =>
     run(async () => {
       const data = await auth.exportData();
-      const a = Object.assign(document.createElement('a'), {
-        href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })),
-        download: `unresub-${user.username}.json`,
-      });
-      a.click();
-      URL.revokeObjectURL(a.href);
+      await saveFile(`unresub-${user.username}.json`, JSON.stringify(data, null, 2), 'application/json');
     });
 
   const [deleting, setDeleting] = useState(false);

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { ApiError, auth, getServer, isNative, passkeysSupported, setServer, type AuthStatus, type SignedIn } from '../api.ts';
+import { ApiError, auth, getServer, isNative, passkeysSupported, saveFile, setServer, type AuthStatus, type SignedIn } from '../api.ts';
 import { Icon } from './Icon.tsx';
 import { ServiceIcon } from './ServiceIcon.tsx';
 
@@ -215,12 +215,9 @@ export const Login = ({ status, onDone, onServerChange }: { status: AuthStatus |
 export const RecoveryCodes = ({ codes, onDone }: { codes: string[]; onDone: () => void }) => {
   const [saved, setSaved] = useState(false);
   const text = `UnReSub recovery codes (${getServer() || location.origin})\nEach works once.\n\n${codes.join('\n')}\n`;
-  const download = () => {
-    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: 'unresub-recovery-codes.txt' });
-    a.click();
-    URL.revokeObjectURL(a.href);
-    setSaved(true);
-  };
+  const [err, setErr] = useState<string | null>(null);
+  const download = () =>
+    void saveFile('unresub-recovery-codes.txt', text).then(ok => ok && setSaved(true), e => setErr((e as Error).message));
   return (
     <Shell>
       <div className="card pad stack">
@@ -231,6 +228,7 @@ export const RecoveryCodes = ({ codes, onDone }: { codes: string[]; onDone: () =
           <button className="btn soft sm" onClick={() => void navigator.clipboard?.writeText(text).then(() => setSaved(true), download)}><Icon name="copy" size={16} /> Copy</button>
           <button className="btn soft sm" onClick={download}><Icon name="download" size={16} /> Download</button>
         </div>
+        {err && <p className="error small">{err}</p>}
         <button className="btn block" onClick={onDone} disabled={!saved}>{saved ? "I've saved them" : 'Copy or download first'}</button>
       </div>
     </Shell>

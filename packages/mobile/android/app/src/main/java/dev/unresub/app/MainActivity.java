@@ -7,6 +7,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(PasskeyPlugin.class);
+        registerPlugin(SaveFilePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }
